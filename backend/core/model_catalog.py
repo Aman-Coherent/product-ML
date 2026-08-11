@@ -58,17 +58,28 @@ GROQ_OVERFLOW_MODELS: list[ModelSpec] = [
 # Mistral confirms rate limits are also listed per-model (Admin Panel -> API
 # -> Limits), but unlike Groq there is no single published table of free-tier
 # numbers per model, and the catalog rotates (open-mistral-nemo is now
-# deprecated in favor of ministral-3-8b-latest). `ministral-3-8b-latest`'s
-# rpm/tpm below are COPIED from the already-tuned `mistral-small-latest`
-# values as a conservative placeholder — confirm the real per-model numbers
-# in your own Admin Panel before trusting them under sustained load; getting
-# this wrong reproduces the exact GROQ_TPM/MISTRAL_TPM misconfiguration bug
-# fixed earlier (rate-limited router never rotating away from an exhausted
+# deprecated in favor of the "Ministral 3" edge family). rpm/tpm below are
+# COPIED from the already-tuned `mistral-small-latest` values as a
+# conservative placeholder — confirm the real per-model numbers in your own
+# Admin Panel before trusting them under sustained load; getting this wrong
+# reproduces the exact GROQ_TPM/MISTRAL_TPM misconfiguration bug fixed
+# earlier (rate-limited router never rotating away from an exhausted
 # deployment). rpd/tpd are left as None since Mistral publishes a monthly
 # (not daily) token allowance instead.
+#
+# IMPORTANT: "ministral-3-8b-latest" (previously here) is NOT a real Mistral
+# model id - it was a typo conflating the two actually-separate "Ministral 3"
+# edge models, "ministral-3b-latest" (3B) and "ministral-8b-latest" (8B).
+# Every single Phase 2 (product generation) call hit Mistral's hard
+# `400 Invalid model` error as a result - 100% of the time, not
+# intermittently like a rate limit - which is why product generation kept
+# falling back to Groq (see STRUCTURED_MODEL's fallback chain in
+# llm_router.py) instead of ever actually using Mistral. Confirmed against
+# Mistral's own docs (docs.mistral.ai) before fixing.
 MISTRAL_PRIMARY_MODELS: list[ModelSpec] = [
     ModelSpec("mistral/mistral-small-latest", "mistral-small", rpm=45, tpm=45_000, rpd=None, tpd=None),
-    ModelSpec("mistral/ministral-3-8b-latest", "ministral-3-8b", rpm=45, tpm=45_000, rpd=None, tpd=None),
+    ModelSpec("mistral/ministral-3b-latest", "ministral-3b", rpm=45, tpm=45_000, rpd=None, tpd=None),
+    ModelSpec("mistral/ministral-8b-latest", "ministral-8b", rpm=45, tpm=45_000, rpd=None, tpd=None),
 ]
 
 MISTRAL_OVERFLOW_MODELS: list[ModelSpec] = []

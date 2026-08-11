@@ -16,7 +16,6 @@ from redis.asyncio import Redis
 
 from backend.core.classifier import classify_company, research_company
 from backend.core.generator import generate_products
-from backend.core.llm_router import first_groq_key, first_groq_key_ref
 from backend.core.models import CompanyResult, UrlReadResult
 from backend.core.url_reader import read_url_for_llm
 
@@ -29,11 +28,22 @@ async def process_company(
     location: str | None,
     url: str | None,
     mode: str,
+    groq_fallback_key: str | None = None,
+    groq_fallback_key_ref: str | None = None,
 ) -> CompanyResult:
+    """
+    `groq_fallback_key`/`groq_fallback_key_ref` are computed ONCE per job by
+    the caller (JobEngine, via llm_router.pick_groq_fallback_key(user_keys))
+    and threaded through here rather than looked up fresh per-company. That
+    keeps this in sync with the same user-key-replaces-system-pool priority
+    `router` was already built with above - this call bypasses `router`
+    entirely (it hits Groq's raw API directly for the compound-beta
+    fallback), so it has no other way to see that priority decision.
+    """
     start = time.monotonic()
     try:
         url_read: UrlReadResult = await read_url_for_llm(
-            url, redis=redis, groq_fallback_key=first_groq_key(), groq_fallback_key_ref=first_groq_key_ref()
+            url, redis=redis, groq_fallback_key=groq_fallback_key, groq_fallback_key_ref=groq_fallback_key_ref
         )
 
         classification = await classify_company(router, company_name, location, url_read)

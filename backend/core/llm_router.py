@@ -15,6 +15,12 @@ the old single default and are load-balanced interchangeably; OVERFLOW-tier
 models (much bigger daily budget, weaker model) are only reached once every
 PRIMARY deployment is already rate-limited, via `fallbacks` below.
 
+The same priority also applies to the one Groq call that bypasses this
+Router entirely: the compound-beta URL-read fallback in pipeline.py calls
+Groq's raw API directly (see `pick_groq_fallback_key()` below), and it
+respects the exact same "user key present -> never touch the system pool"
+rule as everything else here.
+
 RPM/TPM counters used for routing decisions (`usage-based-routing-v2`) are
 process-local in-memory only - see the comment above `Router(**router_kwargs)`
 below for why Redis-backed cross-process sync is deliberately NOT wired in.
@@ -285,14 +291,31 @@ def build_router(user_keys: list[dict] | None = None) -> Router:
     return Router(**router_kwargs)
 
 
-def first_groq_key() -> str | None:
-    """Used by url_reader.py for the compound-beta fallback (raw Groq API, not via router)."""
+def pick_groq_fallback_key(user_keys: list[dict] | None = None) -> tuple[str | None, str | None]:
+    """Used by pipeline.py for the compound-beta URL-read fallback (raw Groq
+    API call, not via the Router, so it can't just pick a deployment out of
+    `build_router`'s model_list like every other Groq/Mistral call does).
+
+    Same replace-not-merge priority as build_router() above: if the user has
+    added their own active Groq key(s), the FIRST one is used here and the
+    system pool is never touched for this user at all. Only a user with zero
+    Groq keys of their own reaches the system pool - this must never silently
+    default to a system key "just for this one feature" while every other
+    Groq call in the same job correctly uses the user's own key; that would
+    be exactly the kind of unwanted, unrequested system-key usage users
+    adding their own keys are trying to avoid.
+
+    Returns (api_key, key_ref) so usage_tracker.py can still attribute this
+    raw call back to the right physical key, matching the id scheme
+    `_deployment()` uses for every router-routed call.
+    """
+    user_groq_keys = [uk for uk in (user_keys or []) if uk.get("provider") == "groq" and uk.get("api_key")]
+    if user_groq_keys:
+        uk = user_groq_keys[0]
+        key_ref = f"user-{uk['id']}" if uk.get("id") else f"user-anon-{id(uk)}"
+        return uk["api_key"], key_ref
+
     keys = get_settings().groq_keys
-    return keys[0] if keys else None
-
-
-def first_groq_key_ref() -> str | None:
-    """Paired with first_groq_key() - the key_ref usage_tracker.py needs to
-    attribute compound-beta's raw (non-router) usage back to the right
-    physical key. Always index 0 since first_groq_key() always is too."""
-    return "system-groq-0" if get_settings().groq_keys else None
+    if not keys:
+        return None, None
+    return keys[0], "system-groq-0"

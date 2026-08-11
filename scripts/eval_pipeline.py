@@ -33,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from backend.core.classifier import classify_company, research_company  # noqa: E402
 from backend.core.eval_candidates import analyze_company, generate_products_deduped  # noqa: E402
 from backend.core.generator import generate_products  # noqa: E402
-from backend.core.llm_router import build_router, first_groq_key, first_groq_key_ref  # noqa: E402
+from backend.core.llm_router import build_router, pick_groq_fallback_key  # noqa: E402
 from backend.core.url_reader import read_url_for_llm  # noqa: E402
 
 # Deliberately diverse fixed sample: every supply chain category, with and
@@ -130,8 +130,7 @@ async def _run_candidate(router, name: str, location: str | None, url_read) -> V
 
 async def main() -> None:
     router = build_router(user_keys=[])
-    groq_key = first_groq_key()
-    groq_key_ref = first_groq_key_ref()
+    groq_key, groq_key_ref = pick_groq_fallback_key(user_keys=[])
 
     rows = []
     for company in SAMPLE_COMPANIES:
