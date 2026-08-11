@@ -1,0 +1,19 @@
+node_modules/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Secrets / environment files
+env
+.env
+.env.*
+!.env.example
+
+# Runtime data (DB, job checkpoints, generated project data)
+backend/data/
+
+# Frontend build output
+frontend/.next/
+frontend/tsconfig.tsbuildinfo
