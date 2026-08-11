@@ -17,3 +17,6 @@ backend/data/
 # Frontend build output
 frontend/.next/
 frontend/tsconfig.tsbuildinfo
+
+# Local dev database
+frontend/prisma/dev.db
