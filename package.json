@@ -3,13 +3,7 @@
   "private": true,
   "scripts": {
     "predev": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/predev.ps1",
-    "dev": "concurrently -k -n backend,worker,frontend -c blue,magenta,green \"npm:dev:backend\" \"npm:dev:worker\" \"npm:dev:frontend\"",
-    "dev:backend": ".venv\\Scripts\\python.exe -m uvicorn backend.main:app --host 127.0.0.1 --port 8000",
-    "dev:worker": ".venv\\Scripts\\python.exe -m arq backend.workers.arq_worker.WorkerSettings",
-    "dev:frontend": "npm --prefix frontend run dev",
+    "dev": "node scripts/dev.mjs",
     "postinstall": "npm install --prefix frontend"
-  },
-  "devDependencies": {
-    "concurrently": "^9.1.2"
   }
 }
