@@ -84,6 +84,18 @@ MISTRAL_PRIMARY_MODELS: list[ModelSpec] = [
 
 MISTRAL_OVERFLOW_MODELS: list[ModelSpec] = []
 
+# Jina Reader isn't an LLM and is never routed through litellm's Router (see
+# url_reader.py — it's a raw httpx call), so `litellm_model` here is a plain
+# label, never actually passed to litellm. This single entry only exists so
+# usage_tracker.py can reuse the exact same per-key/per-"model" daily-usage
+# machinery it already has for Groq/Mistral instead of a second bespoke code
+# path. rpm=500 is Jina's own published authenticated-key limit
+# (jina.ai/reader); rpd/tpd are None because Jina publishes no daily cap for
+# Reader, only the per-minute one — same "Not published" display as Mistral.
+JINA_MODELS: list[ModelSpec] = [
+    ModelSpec("jina/reader", "reader", rpm=500, tpm=0, rpd=None, tpd=None),
+]
+
 
 def specs_for_provider(provider: str) -> list[ModelSpec]:
     """All catalog specs (primary + overflow) that a key for this provider
@@ -93,6 +105,8 @@ def specs_for_provider(provider: str) -> list[ModelSpec]:
         return [*GROQ_PRIMARY_MODELS, *GROQ_OVERFLOW_MODELS]
     if provider == "mistral":
         return [*MISTRAL_PRIMARY_MODELS, *MISTRAL_OVERFLOW_MODELS]
+    if provider == "jina":
+        return JINA_MODELS
     return []
 
 
@@ -111,4 +125,6 @@ def provider_for_tag(tag: str) -> str | None:
         return "groq"
     if any(spec.tag == tag for spec in specs_for_provider("mistral")):
         return "mistral"
+    if any(spec.tag == tag for spec in specs_for_provider("jina")):
+        return "jina"
     return None

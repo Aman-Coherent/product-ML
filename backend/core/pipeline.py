@@ -30,20 +30,30 @@ async def process_company(
     mode: str,
     groq_fallback_key: str | None = None,
     groq_fallback_key_ref: str | None = None,
+    jina_api_key: str | None = None,
+    jina_key_ref: str | None = None,
 ) -> CompanyResult:
     """
-    `groq_fallback_key`/`groq_fallback_key_ref` are computed ONCE per job by
-    the caller (JobEngine, via llm_router.pick_groq_fallback_key(user_keys))
-    and threaded through here rather than looked up fresh per-company. That
-    keeps this in sync with the same user-key-replaces-system-pool priority
-    `router` was already built with above - this call bypasses `router`
-    entirely (it hits Groq's raw API directly for the compound-beta
-    fallback), so it has no other way to see that priority decision.
+    `groq_fallback_key`/`groq_fallback_key_ref` and `jina_api_key`/
+    `jina_key_ref` are computed ONCE per job by the caller (JobEngine, via
+    llm_router.pick_groq_fallback_key/pick_jina_key(user_keys)) and threaded
+    through here rather than looked up fresh per-company. That keeps this in
+    sync with the same user-key priority `router` was already built with
+    above - this call bypasses `router` entirely (it hits Groq/Jina's raw
+    APIs directly), so it has no other way to see that priority decision.
+    Jina in particular has no system-level key at all - a None here is a
+    normal outcome meaning "use Jina's public unauthenticated tier", not a
+    missing/misconfigured key.
     """
     start = time.monotonic()
     try:
         url_read: UrlReadResult = await read_url_for_llm(
-            url, redis=redis, groq_fallback_key=groq_fallback_key, groq_fallback_key_ref=groq_fallback_key_ref
+            url,
+            redis=redis,
+            groq_fallback_key=groq_fallback_key,
+            groq_fallback_key_ref=groq_fallback_key_ref,
+            jina_api_key=jina_api_key,
+            jina_key_ref=jina_key_ref,
         )
 
         classification = await classify_company(router, company_name, location, url_read)

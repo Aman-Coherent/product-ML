@@ -319,3 +319,23 @@ def pick_groq_fallback_key(user_keys: list[dict] | None = None) -> tuple[str | N
     if not keys:
         return None, None
     return keys[0], "system-groq-0"
+
+
+def pick_jina_key(user_keys: list[dict] | None = None) -> tuple[str | None, str | None]:
+    """Jina Reader has no system-level key pool at all (see config.py) - it
+    is either called with the requesting USER's own key (first active one
+    they've added in Settings, provider="jina") or, if they haven't added
+    one, with no key at all. url_reader.py's unauthenticated fallback within
+    _fetch_jina already handles the "no key" case correctly on its own, so
+    returning (None, None) here is a normal, fully-supported outcome, not an
+    error - it must NEVER be filled in with any shared/system credential.
+
+    Returns (api_key, key_ref) so usage_tracker.py can attribute Reader
+    calls back to the right physical key, exactly like pick_groq_fallback_key.
+    """
+    user_jina_keys = [uk for uk in (user_keys or []) if uk.get("provider") == "jina" and uk.get("api_key")]
+    if not user_jina_keys:
+        return None, None
+    uk = user_jina_keys[0]
+    key_ref = f"user-{uk['id']}" if uk.get("id") else f"user-anon-{id(uk)}"
+    return uk["api_key"], key_ref

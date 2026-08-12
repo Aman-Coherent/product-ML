@@ -24,7 +24,11 @@ class Settings(BaseSettings):
     # LLM keys (comma-separated, rotated across requests)
     GROQ_API_KEYS: str = ""
     MISTRAL_API_KEY: str = ""
-    JINA_API_KEY: str = ""
+    # No system-level Jina key by design: unlike Groq/Mistral there is no
+    # shared pool to fall back to - Jina Reader is either called with a
+    # specific USER's own key (see llm_router.pick_jina_key /
+    # UserApiKey(provider="jina")) or, if the user hasn't added one, with no
+    # key at all (Jina's public unauthenticated tier). See url_reader.py.
 
     # Infra
     REDIS_URL: str = "redis://localhost:6379/0"

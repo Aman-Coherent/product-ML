@@ -20,7 +20,6 @@ import logging
 import httpx
 from redis.asyncio import Redis
 
-from backend.config import get_settings
 from backend.core.circuit_breaker import ContentUnavailable, jina_breaker
 from backend.core.models import UrlReadResult, UrlReadSource
 from backend.core.usage_tracker import record_usage
@@ -64,31 +63,50 @@ async def _sync_circuit_status(redis: Redis | None) -> None:
         logger.warning("Failed to sync circuit breaker status to Redis", exc_info=True)
 
 
-async def _fetch_jina(url: str) -> UrlReadResult:
+async def _fetch_jina(
+    url: str,
+    jina_api_key: str | None = None,
+    redis: Redis | None = None,
+    key_ref: str | None = None,
+) -> UrlReadResult:
     """r.jina.ai works completely unauthenticated - no key, no charge - just
-    at lower throughput/priority than the paid tier. We still prefer sending
-    the API key when one is configured (higher rate limit, priority queue),
-    but a 402 specifically means THAT KEY's account balance is exhausted,
-    not that Jina Reader itself is unusable - retrying the exact same
-    request without the Authorization header falls through to the free
-    tier instead of abandoning Jina entirely and degrading straight to
-    compound-beta/name+location for every single company.
+    at lower throughput/priority than the paid tier. There is no shared
+    system-level Jina key: `jina_api_key` (when given) is always a specific
+    USER's own key from Settings (see llm_router.pick_jina_key), never a
+    pooled/shared credential. If the user hasn't added one, this correctly
+    falls through to the public unauthenticated tier rather than failing -
+    that's a normal supported mode, not a degraded one. A 402 specifically
+    means THAT USER's key balance is exhausted, not that Jina Reader itself
+    is unusable - retrying the exact same request without the Authorization
+    header falls through to the free tier instead of abandoning Jina
+    entirely and degrading straight to compound-beta/name+location.
     """
-    settings = get_settings()
     jina_url = f"https://r.jina.ai/{url}"
     base_headers = {"Accept": "application/json", "X-Return-Format": "markdown"}
 
     async with httpx.AsyncClient(timeout=JINA_TIMEOUT) as client:
         resp = None
-        if settings.JINA_API_KEY:
-            headers = {**base_headers, "Authorization": f"Bearer {settings.JINA_API_KEY}"}
+        if jina_api_key:
+            headers = {**base_headers, "Authorization": f"Bearer {jina_api_key}"}
             resp = await client.get(jina_url, headers=headers)
             if resp.status_code == 402:
-                logger.warning("Jina API key has no balance (402) - falling back to free/unauthenticated tier")
+                logger.warning("User's Jina API key has no balance (402) - falling back to free/unauthenticated tier")
                 resp = None
 
         if resp is None:
             resp = await client.get(jina_url, headers=base_headers)
+
+        if redis is not None and key_ref is not None:
+            # Jina isn't token-billed, so prompt/completion tokens are always
+            # 0 here - record_usage still increments the "requests" counter
+            # regardless, which is the number Settings actually needs to show
+            # "is my key being used". See model_catalog.JINA_MODELS for why
+            # this reuses the same per-key/per-model usage machinery as
+            # Groq/Mistral instead of a second bespoke tracking path.
+            try:
+                await record_usage(redis, f"{key_ref}__reader", "jina", 0, 0, headers=dict(resp.headers))
+            except Exception:
+                logger.debug("jina usage capture failed", exc_info=True)
 
         # 400/404/422 mean "Jina looked at THIS url and couldn't render it"
         # (malformed, dead domain, JS it refuses to execute, etc) - that's a
@@ -188,11 +206,19 @@ async def read_url_for_llm(
     redis: Redis | None = None,
     groq_fallback_key: str | None = None,
     groq_fallback_key_ref: str | None = None,
+    jina_api_key: str | None = None,
+    jina_key_ref: str | None = None,
 ) -> UrlReadResult:
     """
     Main entry point. Returns a UrlReadResult that the pipeline feeds
     directly into the LLM prompt as context. Never raises — always
     degrades gracefully to the name_location result.
+
+    `jina_api_key`/`jina_key_ref` come from the CALLING USER's own Jina key
+    (see llm_router.pick_jina_key) - there is deliberately no system-level
+    Jina key to fall back to (see config.py). When the caller has no Jina
+    key of their own, both are None and _fetch_jina correctly uses Jina's
+    public unauthenticated tier instead.
     """
     if not url or not url.strip():
         return UrlReadResult(source=UrlReadSource.NONE, success=False, error="no_url_provided")
@@ -237,7 +263,14 @@ async def read_url_for_llm(
             )
 
     try:
-        result = await jina_breaker.call(_fetch_jina, url, fallback=_compound_fallback)
+        result = await jina_breaker.call(
+            _fetch_jina,
+            url,
+            jina_api_key=jina_api_key,
+            redis=redis,
+            key_ref=jina_key_ref,
+            fallback=_compound_fallback,
+        )
     except Exception as exc:
         logger.info("URL read fully failed for %s: %s", url, exc)
         result = UrlReadResult(source=UrlReadSource.NAME_LOCATION, success=False, error=str(exc))

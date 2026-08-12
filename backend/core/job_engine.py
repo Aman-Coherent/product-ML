@@ -24,7 +24,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.core.checkpoint import append_checkpoint, load_completed_ids
-from backend.core.llm_router import build_router, pick_groq_fallback_key
+from backend.core.llm_router import build_router, pick_groq_fallback_key, pick_jina_key
 from backend.core.models import CompanyResult, SSEEvent, SSEEventType
 from backend.core.pipeline import process_company
 from backend.db.models import CompanyInput, Job, UserApiKey
@@ -245,6 +245,7 @@ class JobEngine:
         # of pipeline.py -> classifier.py/generator.py.
         router._usage_redis = self.redis
         groq_fallback_key, groq_fallback_key_ref = pick_groq_fallback_key(user_keys)
+        jina_api_key, jina_key_ref = pick_jina_key(user_keys)
         writer = ParquetBatchWriter(job_id, project_id, batch_size=100)
 
         semaphore = asyncio.Semaphore(concurrency)
@@ -312,6 +313,8 @@ class JobEngine:
                         mode,
                         groq_fallback_key=groq_fallback_key,
                         groq_fallback_key_ref=groq_fallback_key_ref,
+                        jina_api_key=jina_api_key,
+                        jina_key_ref=jina_key_ref,
                     )
                     writer.add(result)
                     async with self._checkpoint_lock:
