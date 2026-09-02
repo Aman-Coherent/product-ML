@@ -211,11 +211,14 @@ export interface EmailCompanyPage {
   total: number;
 }
 
+export type EmailCategory = "found_given" | "found_discovered" | "guessed";
+
 export interface EmailBatchStats {
   total_companies: number;
   with_email: number;
   by_tier: Record<string, number>;
   by_website_source: Record<string, number>;
+  by_category: Record<EmailCategory, number>;
 }
 
 // ─────────────────────────── Projects ───────────────────────────
@@ -381,12 +384,13 @@ export const api = {
 
   listEmailCompanies: (
     token: string,
-    params: { batchId: string; cursor?: string; limit?: number; status?: string }
+    params: { batchId: string; cursor?: string; limit?: number; status?: string; category?: EmailCategory }
   ) => {
     const search = new URLSearchParams();
     if (params.cursor) search.set("cursor", params.cursor);
     if (params.limit) search.set("limit", String(params.limit));
     if (params.status) search.set("status", params.status);
+    if (params.category) search.set("category", params.category);
     const qs = search.toString();
     return request<EmailCompanyPage>(
       `/api/email-finder/batches/${params.batchId}/companies${qs ? `?${qs}` : ""}`,

@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/sheet";
 import { EmailTierBadge } from "@/components/emails/EmailTierBadge";
 import { useEmailCompanyTable } from "@/hooks/useEmailCompanyTable";
-import type { EmailCompany } from "@/lib/api";
+import type { EmailCategory, EmailCompany } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 const COLUMNS = [
@@ -44,15 +44,18 @@ export function EmailCompanyTable({
   batchId,
   token,
   statusFilter,
+  categoryFilter,
 }: {
   batchId: string;
   token: string | null;
   statusFilter?: string;
+  categoryFilter?: EmailCategory;
 }) {
   const { parentRef, rows, total, virtualizer, virtualItems, isLoading } = useEmailCompanyTable(
     batchId,
     token,
-    statusFilter
+    statusFilter,
+    categoryFilter
   );
   const [selected, setSelected] = useState<EmailCompany | null>(null);
 

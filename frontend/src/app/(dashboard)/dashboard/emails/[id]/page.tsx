@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "next/navigation";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmailBatchToolbar } from "@/components/emails/EmailBatchToolbar";
@@ -12,13 +12,14 @@ import { EmailStatsCards } from "@/components/emails/EmailStatsCards";
 import { LiveProgressBar } from "@/components/projects/LiveProgressBar";
 import { useBackendToken } from "@/hooks/useBackendToken";
 import { useSSEEmailBatch } from "@/hooks/useSSEEmailBatch";
-import { api } from "@/lib/api";
+import { api, type EmailCategory } from "@/lib/api";
 import { useJobStore } from "@/store/jobStore";
 
 export default function EmailBatchDetailPage() {
   const params = useParams<{ id: string }>();
   const batchId = params.id;
   const { data: token } = useBackendToken();
+  const [categoryFilter, setCategoryFilter] = useState<EmailCategory | null>(null);
 
   const { data: batch } = useQuery({
     queryKey: ["email-batch", batchId],
@@ -89,7 +90,12 @@ export default function EmailBatchDetailPage() {
         </div>
       )}
 
-      <EmailStatsCards batch={effectiveBatch} stats={stats} />
+      <EmailStatsCards
+        batch={effectiveBatch}
+        stats={stats}
+        activeCategory={categoryFilter}
+        onCategoryClick={setCategoryFilter}
+      />
 
       <Tabs defaultValue="all">
         <TabsList>
@@ -99,7 +105,7 @@ export default function EmailBatchDetailPage() {
           </TabsTrigger>
         </TabsList>
         <TabsContent value="all" className="mt-4">
-          <EmailCompanyTable batchId={batchId} token={token ?? null} />
+          <EmailCompanyTable batchId={batchId} token={token ?? null} categoryFilter={categoryFilter ?? undefined} />
         </TabsContent>
         <TabsContent value="failed" className="mt-4">
           <EmailErrorLogPanel failedCompanies={failedCompanies?.companies ?? []} />

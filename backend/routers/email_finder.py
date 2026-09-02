@@ -391,12 +391,30 @@ async def retry_failed_companies(
 
 # ─────────────────────────── companies + export ───────────────────────────
 
+_CATEGORY_FILTERS = {
+    # Mirrors EmailTierBadge.tsx's categorize() exactly - see batch_stats'
+    # by_category comment for why this 3-way split exists.
+    "found_given": lambda q: q.where(
+        EmailCompanyInput.primary_tier.in_(("scraped_verified", "scraped_offsite")),
+        EmailCompanyInput.website_source == "provided",
+    ),
+    "found_discovered": lambda q: q.where(
+        EmailCompanyInput.primary_tier.in_(("scraped_verified", "scraped_offsite")),
+        EmailCompanyInput.website_source != "provided",
+    ),
+    "guessed": lambda q: q.where(
+        EmailCompanyInput.primary_tier.in_(("pattern_smtp_verified", "pattern_catchall", "pattern_unverified"))
+    ),
+}
+
+
 @router.get("/batches/{batch_id}/companies", response_model=EmailCompanyPage)
 async def list_companies(
     batch_id: str,
     cursor: str | None = None,
     limit: int = Query(default=PAGE_SIZE_DEFAULT, le=PAGE_SIZE_MAX),
     status_filter: str | None = Query(default=None, alias="status"),
+    category: str | None = Query(default=None, pattern="^(found_given|found_discovered|guessed)$"),
     user: AuthenticatedUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -405,6 +423,8 @@ async def list_companies(
     query = select(EmailCompanyInput).where(EmailCompanyInput.batch_id == batch_id)
     if status_filter:
         query = query.where(EmailCompanyInput.status == status_filter)
+    if category:
+        query = _CATEGORY_FILTERS[category](query)
     if cursor:
         try:
             cursor_index = int(cursor)
@@ -423,6 +443,8 @@ async def list_companies(
     total_query = select(func.count()).select_from(EmailCompanyInput).where(EmailCompanyInput.batch_id == batch_id)
     if status_filter:
         total_query = total_query.where(EmailCompanyInput.status == status_filter)
+    if category:
+        total_query = _CATEGORY_FILTERS[category](total_query)
     total = (await session.execute(total_query)).scalar_one()
 
     return EmailCompanyPage(
@@ -467,11 +489,30 @@ async def batch_stats(
         )
     ).all()
 
+    # Same 3-way simplification as the frontend badge (EmailTierBadge.tsx) -
+    # computed here in one grouped query rather than in Python over every
+    # row, since a batch can have tens of thousands of companies and the
+    # UI needs this instantly, not after scanning the whole table.
+    by_category_rows = (
+        await session.execute(
+            select(EmailCompanyInput.primary_tier, EmailCompanyInput.website_source, func.count())
+            .where(EmailCompanyInput.batch_id == batch_id, EmailCompanyInput.primary_tier.is_not(None))
+            .group_by(EmailCompanyInput.primary_tier, EmailCompanyInput.website_source)
+        )
+    ).all()
+    by_category = {"found_given": 0, "found_discovered": 0, "guessed": 0}
+    for tier, source, count in by_category_rows:
+        if tier in ("scraped_verified", "scraped_offsite"):
+            by_category["found_given" if source == "provided" else "found_discovered"] += count
+        else:
+            by_category["guessed"] += count
+
     return {
         "total_companies": total,
         "with_email": with_email,
         "by_tier": {row[0]: row[1] for row in by_tier_rows if row[0]},
         "by_website_source": {row[0]: row[1] for row in by_source_rows if row[0]},
+        "by_category": by_category,
     }
 
 

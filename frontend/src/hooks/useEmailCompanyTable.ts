@@ -4,24 +4,34 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef } from "react";
 
-import { api } from "@/lib/api";
+import { api, type EmailCategory } from "@/lib/api";
 
 const PAGE_SIZE = 50;
 const ROW_HEIGHT = 52;
 
 /** Same shape/rationale as useCompanyTable.ts (product-generation table) -
- * see that file's comments for why pagination is deliberately unbounded. */
-export function useEmailCompanyTable(batchId: string, token: string | null, statusFilter?: string) {
+ * see that file's comments for why pagination is deliberately unbounded.
+ * `categoryFilter` is applied server-side (see routers/email_finder.py's
+ * _CATEGORY_FILTERS) - essential at real scale (tens of thousands of
+ * companies per batch), where filtering client-side would mean fetching
+ * every page first. */
+export function useEmailCompanyTable(
+  batchId: string,
+  token: string | null,
+  statusFilter?: string,
+  categoryFilter?: EmailCategory
+) {
   const parentRef = useRef<HTMLDivElement | null>(null);
 
   const query = useInfiniteQuery({
-    queryKey: ["email-companies", batchId, statusFilter],
+    queryKey: ["email-companies", batchId, statusFilter, categoryFilter],
     queryFn: ({ pageParam }) =>
       api.listEmailCompanies(token as string, {
         batchId,
         cursor: pageParam as string | undefined,
         limit: PAGE_SIZE,
         status: statusFilter,
+        category: categoryFilter,
       }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
