@@ -151,13 +151,20 @@ async def find_company_email(
 
         if resolved_url:
             pages = await crawl_company_site(
-                resolved_url, redis, allow_offsite=_allow_offsite(), location=location, jina_api_key=jina_api_key
+                resolved_url,
+                redis,
+                allow_offsite=_allow_offsite(),
+                location=location,
+                jina_api_key=jina_api_key,
+                company_name=company_name,
             )
             domain = site_domain(resolved_url)
             for page in pages:
                 result.pages_checked.append(page.url)
                 if page.success:
-                    all_candidates.extend(extract_emails(page.content, page.url, domain, _allow_offsite()))
+                    all_candidates.extend(
+                        extract_emails(page.content, page.url, domain, _allow_offsite(), company_name)
+                    )
 
         if not all_candidates and not resolved_url:
             # No URL given and web search found nothing - last resort:
@@ -169,12 +176,19 @@ async def find_company_email(
                 resolved_url = f"https://{guessed_domain}"
                 website_source = WebsiteSource.DOMAIN_GUESS
                 pages = await crawl_company_site(
-                    resolved_url, redis, allow_offsite=False, location=location, jina_api_key=jina_api_key
+                    resolved_url,
+                    redis,
+                    allow_offsite=False,
+                    location=location,
+                    jina_api_key=jina_api_key,
+                    company_name=company_name,
                 )
                 for page in pages:
                     result.pages_checked.append(page.url)
                     if page.success:
-                        all_candidates.extend(extract_emails(page.content, page.url, guessed_domain, False))
+                        all_candidates.extend(
+                            extract_emails(page.content, page.url, guessed_domain, False, company_name)
+                        )
 
         if not all_candidates and resolved_url:
             # We have a confirmed-real domain but found no live email on it

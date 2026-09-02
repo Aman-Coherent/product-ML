@@ -304,6 +304,7 @@ async def crawl_company_site(
     allow_offsite: bool = True,
     location: str | None = None,
     jina_api_key: str | None = None,
+    company_name: str | None = None,
 ) -> list[PageFetch]:
     """Fetches the homepage, then up to MAX_EXTRA_PAGES more pages: a
     discovered Contact link (preferred), else a discovered About link, else
@@ -323,7 +324,13 @@ async def crawl_company_site(
 
     `jina_api_key`, if the calling user has added their own in Settings,
     gets them Jina's paid tier's higher per-IP throughput instead of the
-    public tier's tight rate limit (see MAX_CONCURRENT_JINA_FETCHES)."""
+    public tier's tight rate limit (see MAX_CONCURRENT_JINA_FETCHES).
+
+    `company_name` is passed straight through to extract_emails as a
+    second, independent way an off-domain email can be trusted - see its
+    own docstring (domain_matches_company_name) for the real case this
+    covers: a site's own domain and its real contact email's domain don't
+    always match even when both are genuinely the company's."""
     from backend.core.email_finder.extractor import extract_emails  # local import avoids a cycle at module load
 
     base_url = normalize_url(url)
@@ -334,7 +341,7 @@ async def crawl_company_site(
 
         home = await _fetch_one(client, base_url, redis, jina_api_key)
         pages.append(home)
-        if home.success and extract_emails(home.content, base_url, domain, allow_offsite):
+        if home.success and extract_emails(home.content, base_url, domain, allow_offsite, company_name):
             return pages
 
         link_sources = [home] if home.success else []
@@ -348,7 +355,7 @@ async def crawl_company_site(
                 # by extract_emails downstream - a kontakt@bosch.de match
                 # here is correctly SCRAPED_VERIFIED, not "offsite", the
                 # moment pipeline.py's own allow_offsite gate lets it through.
-                if extract_emails(localized.content, localized_url, domain, allow_offsite):
+                if extract_emails(localized.content, localized_url, domain, allow_offsite, company_name):
                     return pages
                 link_sources.append(localized)
 
@@ -380,7 +387,7 @@ async def crawl_company_site(
 
             page = await _fetch_one(client, candidate, redis, jina_api_key)
             pages.append(page)
-            if page.success and extract_emails(page.content, candidate, domain, allow_offsite):
+            if page.success and extract_emails(page.content, candidate, domain, allow_offsite, company_name):
                 break
 
         return pages

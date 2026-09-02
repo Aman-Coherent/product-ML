@@ -8,7 +8,11 @@ from __future__ import annotations
 
 import re
 
-from backend.core.email_finder.domain_utils import registrable_domain, same_organization
+from backend.core.email_finder.domain_utils import (
+    domain_matches_company_name,
+    registrable_domain,
+    same_organization,
+)
 from backend.core.email_finder.models import TIER_CONFIDENCE, EmailCandidate, EmailLabel, EmailTier
 
 EMAIL_REGEX = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,24}")
@@ -100,7 +104,11 @@ def is_valid_candidate(email: str) -> bool:
 
 
 def extract_emails(
-    text: str, page_url: str, site_domain: str | None, allow_offsite: bool = True
+    text: str,
+    page_url: str,
+    site_domain: str | None,
+    allow_offsite: bool = True,
+    company_name: str | None = None,
 ) -> list[EmailCandidate]:
     """`site_domain` is the company's own resolved website domain (if known)
     - used to decide SCRAPED_VERIFIED vs SCRAPED_OFFSITE.
@@ -114,7 +122,17 @@ def extract_emails(
     guess plus an off-domain email on that wrong page combine into a
     confidently-labeled result that's actually a stranger's contact info.
     Only PROVIDED URLs (the user told us directly) are trusted enough to
-    accept an off-domain match - see pipeline.py."""
+    accept an off-domain match - see pipeline.py.
+
+    `company_name`, if given, is a SECOND independent way for an
+    off-domain email to earn trust: if its domain plausibly matches the
+    COMPANY'S OWN NAME (see domain_utils.domain_matches_company_name),
+    it's treated as verified regardless of `allow_offsite` - confirmed
+    real case: coltmaterials.co.uk's real, correctly-scraped contact
+    email is sales@coltmaterialsolutions.co.uk, a different domain from
+    the site itself but obviously the same company by name. Without this,
+    that real email was being discarded (whenever the site wasn't
+    directly PROVIDED) and replaced with a worse, invented guess."""
     found: dict[str, EmailCandidate] = {}
     site_domain_norm = registrable_domain(site_domain) if site_domain else None
 
@@ -138,9 +156,10 @@ def extract_emails(
         # own docstring for why a multinational's own country-market
         # domain must count as fully trustworthy, not "offsite".
         same_domain = site_domain_norm is not None and same_organization(domain, site_domain_norm)
-        if not same_domain and not allow_offsite:
+        name_matched = not same_domain and company_name and domain_matches_company_name(domain, company_name)
+        if not same_domain and not name_matched and not allow_offsite:
             continue
-        tier = EmailTier.SCRAPED_VERIFIED if same_domain else EmailTier.SCRAPED_OFFSITE
+        tier = EmailTier.SCRAPED_VERIFIED if (same_domain or name_matched) else EmailTier.SCRAPED_OFFSITE
 
         found[key] = EmailCandidate(
             email=email,

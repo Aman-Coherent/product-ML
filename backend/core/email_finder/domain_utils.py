@@ -40,3 +40,32 @@ def organization_name(domain: str) -> str:
 def same_organization(domain_a: str, domain_b: str) -> bool:
     a, b = organization_name(domain_a), organization_name(domain_b)
     return bool(a) and a == b
+
+
+def domain_matches_company_name(domain: str, company_name: str) -> bool:
+    """True if an email's domain plausibly belongs to this company BY NAME,
+    independent of what website it was actually found on.
+
+    Confirmed real case this exists for: coltmaterials.co.uk (the site) vs
+    sales@coltmaterialsolutions.co.uk (the email actually on that site) -
+    a rebranded/shortened site domain that kept an older or fuller email
+    domain is a very common real-world pattern, not an edge case. Without
+    this, that email is only trusted when the website itself was directly
+    PROVIDED (see pipeline.py's allow_offsite) - the moment the site had to
+    be found via search or a guessed domain, the same real, correctly-
+    scraped email was being thrown away entirely and replaced with a
+    lower-quality pattern GUESS, which is strictly worse: we had the real
+    answer and discarded it in favor of inventing one.
+
+    Deliberately a substring match in either direction (not exact) since
+    real variants like "coltmaterials" / "coltmaterialsolutions" or
+    "acme" / "acmegroup" are both extremely common and both genuinely the
+    same company - but only above a minimum length, so a short generic
+    fragment ("co", "the") can't trivially match everything."""
+    from backend.core.email_finder.domain_guesser import company_name_slug
+
+    name_slug = company_name_slug(company_name)
+    domain_slug = organization_name(domain)
+    if len(name_slug) < 4 or len(domain_slug) < 4:
+        return False
+    return name_slug in domain_slug or domain_slug in name_slug

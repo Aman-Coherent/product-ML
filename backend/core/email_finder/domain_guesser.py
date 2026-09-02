@@ -110,6 +110,20 @@ def _slugify(words: list[str], sep: str = "") -> str:
     return joined
 
 
+def company_name_slug(company_name: str) -> str:
+    """The same normalized, legal-suffix-stripped slug generate_domain_candidates
+    builds internally (e.g. "Colt Material Solutions Ltd" -> "coltmaterialsolutions"),
+    exposed for extractor.py to compare a found email's domain against the
+    COMPANY NAME directly - not just against whatever site it happened to
+    be found on. See domain_utils.same_organization_or_name_match's
+    docstring for the real case this fixes."""
+    raw_words = [w for w in re.split(r"\s+", company_name.strip()) if w]
+    if not raw_words:
+        return ""
+    core_words = _strip_legal_suffix(raw_words) or raw_words
+    return _slugify(core_words)
+
+
 def generate_domain_candidates(company_name: str, location: str | None = None, limit: int = 8) -> list[str]:
     """
     Returns ranked candidate domains, most-likely first. Callers are
