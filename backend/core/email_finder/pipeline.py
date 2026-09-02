@@ -181,7 +181,7 @@ async def find_company_email(
     location: str | None,
     url: str | None,
     redis: Redis | None = None,
-    groq_api_key: str | None = None,
+    groq_api_keys: list[tuple[str, str]] | None = None,
     jina_api_key: str | None = None,
 ) -> EmailResult:
     start = time.monotonic()
@@ -227,7 +227,9 @@ async def find_company_email(
                 # Not one guessed candidate even rendered - spend the
                 # scarce, quota-limited AI web search as a secondary
                 # attempt rather than the first thing tried.
-                found = await website_discovery.find_official_website(company_name, location, groq_api_key, redis)
+                found = await website_discovery.find_official_website(
+                    company_name, location, groq_api_keys or [], redis
+                )
                 if found:
                     resolved_url = found
                     website_source = WebsiteSource.WEB_SEARCH

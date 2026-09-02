@@ -321,6 +321,36 @@ def pick_groq_fallback_key(user_keys: list[dict] | None = None) -> tuple[str | N
     return keys[0], "system-groq-0"
 
 
+def pick_all_groq_keys(user_keys: list[dict] | None = None) -> list[tuple[str, str]]:
+    """Same replace-not-merge priority as pick_groq_fallback_key, but
+    returns EVERY available key instead of just the first.
+
+    This is what actually makes the difference for a raw (non-Router) Groq
+    call under heavy load: pick_groq_fallback_key's single-key behavior was
+    the confirmed root cause of the email finder's website-search step
+    exhausting its quota almost instantly on a large batch, even though
+    the system pool has 8 Groq keys configured - it only ever touched key
+    #0. Every product-generation call in this app avoids the same failure
+    mode precisely by fanning out across every system key (see this
+    module's docstring: "every extra model/key is a genuinely separate
+    quota bucket") via build_router()'s model_list - this is the same
+    strategy, just for the one call that bypasses the Router entirely
+    (website_discovery.py's find_official_website, which needs Groq's
+    `compound_custom` tool-calling shape that litellm's Router doesn't
+    cleanly support). Groq's `groq/compound` model has an unusually low
+    250-request/DAY cap (confirmed live via its actual 429 response body)
+    - rotating across N keys turns that into N x 250/day instead of a
+    single shared 250/day for the whole system.
+    """
+    user_groq_keys = [uk for uk in (user_keys or []) if uk.get("provider") == "groq" and uk.get("api_key")]
+    if user_groq_keys:
+        return [
+            (uk["api_key"], f"user-{uk['id']}" if uk.get("id") else f"user-anon-{id(uk)}")
+            for uk in user_groq_keys
+        ]
+    return [(key, f"system-groq-{i}") for i, key in enumerate(get_settings().groq_keys)]
+
+
 def pick_jina_key(user_keys: list[dict] | None = None) -> tuple[str | None, str | None]:
     """Jina Reader has no system-level key pool at all (see config.py) - it
     is either called with the requesting USER's own key (first active one

@@ -24,7 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backend.core.email_finder.pipeline import find_company_email  # noqa: E402
-from backend.core.llm_router import pick_groq_fallback_key  # noqa: E402
+from backend.core.llm_router import pick_all_groq_keys  # noqa: E402
 
 SAMPLE_COMPANIES = [
     {"name": "Tetra Pak", "location": "Lund, Sweden", "url": "https://www.tetrapak.com"},
@@ -37,7 +37,7 @@ SAMPLE_COMPANIES = [
 
 
 async def main() -> None:
-    groq_key, _ = pick_groq_fallback_key(user_keys=[])
+    groq_keys = pick_all_groq_keys(user_keys=[])
 
     print(f"{'Company':<42} {'Website source':<14} {'Resolved URL':<32} {'Primary email':<32} {'Tier':<24} {'Conf':<5} {'Pages':<6} {'ms':<6}")
     print("-" * 165)
@@ -49,7 +49,7 @@ async def main() -> None:
             location=company["location"],
             url=company["url"],
             redis=None,
-            groq_api_key=groq_key,
+            groq_api_keys=groq_keys,
         )
         print(
             f"{company['name']:<42} "

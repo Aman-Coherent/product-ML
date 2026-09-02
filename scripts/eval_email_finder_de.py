@@ -24,7 +24,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from backend.core.email_finder.pipeline import find_company_email  # noqa: E402
-from backend.core.llm_router import pick_groq_fallback_key  # noqa: E402
+from backend.core.llm_router import pick_all_groq_keys  # noqa: E402
 
 # 50 real, well-known German companies spanning the app's supply-chain
 # categories (raw material, machinery, packaging, finished goods), all with
@@ -84,7 +84,7 @@ GERMAN_COMPANIES = [
 ]
 
 
-async def _run_one(sem: asyncio.Semaphore, groq_key: str | None, company: dict, idx: int):
+async def _run_one(sem: asyncio.Semaphore, groq_keys: list[tuple[str, str]], company: dict, idx: int):
     async with sem:
         try:
             result = await asyncio.wait_for(
@@ -94,7 +94,7 @@ async def _run_one(sem: asyncio.Semaphore, groq_key: str | None, company: dict, 
                     location=company["location"],
                     url=company["url"],
                     redis=None,
-                    groq_api_key=groq_key,
+                    groq_api_keys=groq_keys,
                 ),
                 timeout=90.0,
             )
@@ -104,7 +104,7 @@ async def _run_one(sem: asyncio.Semaphore, groq_key: str | None, company: dict, 
 
 
 async def main() -> None:
-    groq_key, _ = pick_groq_fallback_key(user_keys=[])
+    groq_keys = pick_all_groq_keys(user_keys=[])
     # Deliberately the real default batch concurrency (see EmailBatch.concurrency
     # in db/email_models.py) - the point of this run is to prove
     # crawler.py's own internal Jina semaphore + 429 retry keeps results
@@ -113,7 +113,7 @@ async def main() -> None:
     # script's own concurrency down to whatever happens to work.
     sem = asyncio.Semaphore(10)
 
-    tasks = [_run_one(sem, groq_key, c, i) for i, c in enumerate(GERMAN_COMPANIES)]
+    tasks = [_run_one(sem, groq_keys, c, i) for i, c in enumerate(GERMAN_COMPANIES)]
     results = await asyncio.gather(*tasks)
 
     tier_counts: dict[str, int] = {}

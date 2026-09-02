@@ -30,7 +30,7 @@ from backend.core.job_control import (
     release_run_lock,
     request_resume,
 )
-from backend.core.llm_router import pick_groq_fallback_key, pick_jina_key
+from backend.core.llm_router import pick_all_groq_keys, pick_jina_key
 from backend.core.models import SSEEvent, SSEEventType
 from backend.core.user_keys import load_user_keys
 from backend.db.email_models import EmailBatch, EmailCompanyInput
@@ -128,7 +128,14 @@ class EmailJobEngine:
         completed_ids = await load_completed_ids(batch_id)
         pending = [c for c in companies if c.id not in completed_ids]
 
-        groq_api_key, _ = pick_groq_fallback_key(user_keys)
+        # ALL available Groq keys, not just one - see llm_router.
+        # pick_all_groq_keys' docstring for why: the website-search step's
+        # `groq/compound` model has a low 250-request/DAY cap, and rotating
+        # across every configured key (8 in the system pool) turns that
+        # into ~2000/day instead of a single shared 250/day for the whole
+        # batch - confirmed as the actual root cause of a real large batch
+        # landing almost entirely in "no website found".
+        groq_api_keys = pick_all_groq_keys(user_keys)
         # Same priority rule as the product-generation JobEngine: a user's
         # own paid Jina key (if they've added one in Settings) gets used
         # instead of the public tier, which - confirmed via real testing,
@@ -173,7 +180,7 @@ class EmailJobEngine:
                         company.location,
                         company.url,
                         redis=self.redis,
-                        groq_api_key=groq_api_key,
+                        groq_api_keys=groq_api_keys,
                         jina_api_key=jina_api_key,
                     )
 
