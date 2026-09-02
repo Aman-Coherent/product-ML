@@ -10,7 +10,7 @@ from backend.config import get_settings
 from backend.core.usage_tracker import enable_usage_capture
 from backend.db.database import init_db
 from backend.dependencies import close_connections
-from backend.routers import companies, export, jobs, projects, stream, usage, user_settings
+from backend.routers import companies, email_finder, export, jobs, projects, stream, usage, user_settings
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")
@@ -49,6 +49,7 @@ app.include_router(companies.router)
 app.include_router(export.router)
 app.include_router(user_settings.router)
 app.include_router(usage.router)
+app.include_router(email_finder.router)
 
 
 @app.get("/api/health")

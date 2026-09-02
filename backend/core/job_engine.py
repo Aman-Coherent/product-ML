@@ -16,7 +16,6 @@ import asyncio
 import contextlib
 import json
 import logging
-import uuid
 from datetime import datetime, timezone
 
 from redis.asyncio import Redis
@@ -24,112 +23,31 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from backend.core.checkpoint import append_checkpoint, load_completed_ids
+from backend.core.job_control import (
+    acquire_run_lock as _acquire_run_lock,
+    get_control as _get_control,
+    heartbeat_run_lock as _heartbeat_run_lock,
+    release_run_lock as _release_run_lock,
+    request_cancel,
+    request_pause,
+    request_resume,
+    run_lock_key as _run_lock_key,
+)
 from backend.core.llm_router import build_router, pick_groq_fallback_key, pick_jina_key
 from backend.core.models import CompanyResult, SSEEvent, SSEEventType
 from backend.core.pipeline import process_company
-from backend.db.models import CompanyInput, Job, UserApiKey
+from backend.core.user_keys import load_user_keys as _load_user_keys
+from backend.db.models import CompanyInput, Job
 from backend.storage.parquet_writer import ParquetBatchWriter
 from backend.workers.sse_publisher import publish_event
 
 logger = logging.getLogger("job_engine")
 
-
-RUN_LOCK_TTL_SECONDS = 90
-RUN_LOCK_HEARTBEAT_SECONDS = 30
-
-
-def _control_key(job_id: str) -> str:
-    return f"job_control:{job_id}"  # "running" | "pause" | "cancel"
-
-
-def _run_lock_key(job_id: str) -> str:
-    return f"job_run_lock:{job_id}"
-
-
-async def _acquire_run_lock(redis: Redis, job_id: str) -> str | None:
-    """
-    Prevents two `JobEngine.run()` executions for the same job_id from ever
-    being active at once (e.g. an ARQ auto-redelivery of an abandoned
-    in-progress task overlapping with a manually re-enqueued resume, or a
-    double-click of Resume in the UI). Without this, both would concurrently
-    read/increment `job.done`/`job.failed` through separate in-memory
-    `asyncio.Lock`s that know nothing of each other, causing lost updates
-    and an inconsistent final `job.status`.
-
-    Uses a short, heartbeat-renewed TTL rather than a TTL long enough to
-    cover a whole job: if this process is hard-killed, the lock frees itself
-    within `RUN_LOCK_TTL_SECONDS` instead of blocking every future resume
-    attempt for hours.
-    """
-    token = uuid.uuid4().hex
-    acquired = await redis.set(_run_lock_key(job_id), token, nx=True, ex=RUN_LOCK_TTL_SECONDS)
-    return token if acquired else None
-
-
-async def _release_run_lock(redis: Redis, job_id: str, token: str) -> None:
-    lua = """
-    if redis.call("get", KEYS[1]) == ARGV[1] then
-        return redis.call("del", KEYS[1])
-    end
-    return 0
-    """
-    try:
-        await redis.eval(lua, 1, _run_lock_key(job_id), token)
-    except Exception:
-        logger.warning("Failed to release run lock for job %s", job_id, exc_info=True)
-
-
-async def _heartbeat_run_lock(redis: Redis, job_id: str, token: str) -> None:
-    """Runs alongside the job, periodically extending the lock TTL so a
-    long-running job never has its own lock expire out from under it."""
-    try:
-        while True:
-            await asyncio.sleep(RUN_LOCK_HEARTBEAT_SECONDS)
-            lua = """
-            if redis.call("get", KEYS[1]) == ARGV[1] then
-                return redis.call("expire", KEYS[1], ARGV[2])
-            end
-            return 0
-            """
-            await redis.eval(lua, 1, _run_lock_key(job_id), token, RUN_LOCK_TTL_SECONDS)
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        logger.warning("Run-lock heartbeat failed for job %s", job_id, exc_info=True)
-
-
-async def request_pause(redis: Redis, job_id: str) -> None:
-    await redis.set(_control_key(job_id), "pause")
-
-
-async def request_cancel(redis: Redis, job_id: str) -> None:
-    await redis.set(_control_key(job_id), "cancel")
-
-
-async def request_resume(redis: Redis, job_id: str) -> None:
-    await redis.set(_control_key(job_id), "running")
-
-
-async def _get_control(redis: Redis, job_id: str) -> str:
-    value = await redis.get(_control_key(job_id))
-    return value.decode() if isinstance(value, bytes) else (value or "running")
-
-
-async def _load_user_keys(session: AsyncSession, user_id: str) -> list[dict]:
-    result = await session.execute(
-        select(UserApiKey).where(UserApiKey.user_id == user_id, UserApiKey.is_active.is_(True))
-    )
-    keys = result.scalars().all()
-    return [
-        {
-            "id": k.id,
-            "provider": k.provider,
-            "api_key": k.api_key,
-            "model_name": k.model_name,
-            "base_url": k.base_url,
-        }
-        for k in keys
-    ]
+# request_pause/request_cancel/request_resume and _run_lock_key are
+# re-exported here (unused-import ignored) since routers/jobs.py and
+# workers/arq_worker.py import them from this module - see job_control.py
+# for the actual generic (job-table-agnostic) implementation, now shared
+# with EmailJobEngine.
 
 
 class JobEngine:

@@ -26,6 +26,9 @@ pyarrow==18.1.0
 # --- HTTP client ---
 httpx>=0.27.0,<0.28.0
 
+# --- Email finder (DNS/SMTP verification) ---
+dnspython==2.7.0
+
 # --- Security ---
 cryptography==44.0.0
 pyjwt==2.10.1

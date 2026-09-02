@@ -1,6 +1,6 @@
 "use client";
 
-import { Boxes, LayoutDashboard, Plus, Settings, LogOut } from "lucide-react";
+import { Boxes, LayoutDashboard, Mail, Plus, Settings, LogOut } from "lucide-react";
 import { signOut, useSession } from "next-auth/react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/button";
 const navItems = [
   { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
   { title: "New Project", url: "/dashboard/projects/new", icon: Plus },
+  { title: "Email Finder", url: "/dashboard/emails", icon: Mail },
   { title: "Settings", url: "/dashboard/settings", icon: Settings },
 ];
 
@@ -50,7 +51,14 @@ export function AppSidebar() {
               {navItems.map((item) => (
                 <SidebarMenuItem key={item.url}>
                   <SidebarMenuButton
-                    isActive={pathname === item.url}
+                    isActive={
+                      // Email Finder has real depth under it (/new, /[id]) -
+                      // startsWith keeps the nav item highlighted while
+                      // browsing a batch, not just on the list page itself.
+                      // Every other item here is a single flat destination,
+                      // so exact match stays correct for those.
+                      item.url === "/dashboard/emails" ? pathname.startsWith(item.url) : pathname === item.url
+                    }
                     tooltip={item.title}
                     render={
                       <Link href={item.url}>

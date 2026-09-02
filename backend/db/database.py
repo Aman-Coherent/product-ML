@@ -9,6 +9,21 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from backend.config import get_settings
 from backend.db.models import Base
 
+# `Base.metadata.create_all` (see init_db below) only creates tables for
+# model classes that have actually been imported somewhere by the time it
+# runs - it doesn't scan the filesystem. email_models.py lives in a
+# separate module from models.py (deliberately - see its docstring), so
+# without this import here, `create_all` would silently skip EmailBatch/
+# EmailCompanyInput entirely unless some OTHER import happened to pull it
+# in first (e.g. main.py's router import) - fragile and order-dependent.
+# Importing it right here, next to Base itself, guarantees every entry
+# point that calls init_db() (FastAPI app, ARQ worker, ad-hoc scripts)
+# gets both table sets registered, with zero reliance on import order
+# elsewhere. Confirmed this was a real gap, not a theoretical one: a
+# standalone init_db() call without backend.main ever having been imported
+# created every table except these two.
+from backend.db import email_models  # noqa: F401
+
 settings = get_settings()
 
 # SQLite defaults are hostile to a job engine with 20+ concurrent async
