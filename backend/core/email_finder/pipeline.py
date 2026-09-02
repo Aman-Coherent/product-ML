@@ -117,6 +117,7 @@ async def find_company_email(
     url: str | None,
     redis: Redis | None = None,
     groq_api_key: str | None = None,
+    jina_api_key: str | None = None,
 ) -> EmailResult:
     start = time.monotonic()
     result = EmailResult(company_id=company_id, company_name=company_name, location=location, input_url=url)
@@ -149,7 +150,9 @@ async def find_company_email(
             return website_source == WebsiteSource.PROVIDED
 
         if resolved_url:
-            pages = await crawl_company_site(resolved_url, redis, allow_offsite=_allow_offsite())
+            pages = await crawl_company_site(
+                resolved_url, redis, allow_offsite=_allow_offsite(), location=location, jina_api_key=jina_api_key
+            )
             domain = site_domain(resolved_url)
             for page in pages:
                 result.pages_checked.append(page.url)
@@ -165,7 +168,9 @@ async def find_company_email(
             if guessed_domain:
                 resolved_url = f"https://{guessed_domain}"
                 website_source = WebsiteSource.DOMAIN_GUESS
-                pages = await crawl_company_site(resolved_url, redis, allow_offsite=False)
+                pages = await crawl_company_site(
+                    resolved_url, redis, allow_offsite=False, location=location, jina_api_key=jina_api_key
+                )
                 for page in pages:
                     result.pages_checked.append(page.url)
                     if page.success:

@@ -21,10 +21,20 @@ _LEGAL_SUFFIXES = [
     "corporation", "corp", "co", "company", "gmbh", "ag", "sa", "sas",
     "s.a", "pvt ltd", "pvt. ltd", "private limited", "pty ltd", "pty. ltd",
     "group", "holdings", "enterprises", "industries", "international", "intl",
+    # German legal forms - previously missing entirely, which mattered: a
+    # real 50-company German test run showed names like "Henkel AG & Co.
+    # KGaA" or "Rittal GmbH & Co. KG" guessing garbage domains (e.g.
+    # "henkelagcokgaa.com") because none of these tokens were recognized.
+    # Compound forms listed explicitly (so they strip in one pass as a
+    # whole unit) alongside the single-word forms they're built from (so
+    # e.g. a bare "... KG" or "... SE" on its own still strips correctly).
+    "gmbh & co kg", "gmbh & co kgaa", "ag & co kgaa", "ag & co kg",
+    "se & co kg", "se & co kgaa", "se + co kg", "se + co kgaa",
+    "kgaa", "kg", "ohg", "mbh", "se", "e.v",
 ]
 
 # Ordered roughly by global usage share; ccTLDs are only tried when the
-# location string gives a strong signal (see _cctld_for_location).
+# location string gives a strong signal (see cctld_for_location).
 _GENERIC_TLDS = ["com", "co", "net", "org", "io"]
 
 # Deliberately small and high-confidence only - a wrong ccTLD guess is a
@@ -60,17 +70,32 @@ def _strip_legal_suffix(words: list[str]) -> list[str]:
     """Drops a trailing legal-entity suffix (possibly multi-word, e.g.
     "Pvt Ltd") if the name ends with one. Only ever strips from the end -
     a suffix-like word in the middle of a name is presumably part of the
-    actual brand."""
+    actual brand.
+
+    Loops (bounded to 2 passes) rather than stopping after one strip,
+    because German company names routinely stack TWO legal-form markers
+    (e.g. "Claas KGaA mbH") - stripping only "mbH" once would leave "KGaA"
+    still glued onto the core name, guessing "claaskgaa.com" instead of the
+    real "claas.com". Two passes is enough for every real-world case seen
+    so far without risking eating into the actual brand name on an
+    unrelated short trailing word."""
     lowered = [w.lower().strip(".,") for w in words]
-    for suffix in sorted(_LEGAL_SUFFIXES, key=len, reverse=True):
-        suffix_words = suffix.split()
-        n = len(suffix_words)
-        if n <= len(lowered) and lowered[-n:] == suffix_words:
-            return words[:-n]
+    for _ in range(2):
+        stripped_one = False
+        for suffix in sorted(_LEGAL_SUFFIXES, key=len, reverse=True):
+            suffix_words = suffix.split()
+            n = len(suffix_words)
+            if n <= len(lowered) and lowered[-n:] == suffix_words:
+                words = words[:-n]
+                lowered = lowered[:-n]
+                stripped_one = True
+                break
+        if not stripped_one:
+            break
     return words
 
 
-def _cctld_for_location(location: str | None) -> str | None:
+def cctld_for_location(location: str | None) -> str | None:
     if not location:
         return None
     loc = location.lower()
@@ -103,7 +128,7 @@ def generate_domain_candidates(company_name: str, location: str | None = None, l
     if not concat:
         return []
 
-    tlds = [t for t in [_cctld_for_location(location)] if t] + _GENERIC_TLDS
+    tlds = [t for t in [cctld_for_location(location)] if t] + _GENERIC_TLDS
     # De-dupe while preserving order (a ccTLD could coincidentally match a
     # generic one, e.g. neither list actually overlaps today, but stay safe).
     seen_tlds: set[str] = set()

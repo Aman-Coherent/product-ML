@@ -21,7 +21,7 @@ const COLUMNS = [
   { key: "company_name", label: "Company", width: "w-48" },
   { key: "location", label: "Location", width: "w-36" },
   { key: "status", label: "Status", width: "w-24" },
-  { key: "website", label: "Website", width: "w-40" },
+  { key: "website", label: "Discovered Website", width: "w-52" },
   { key: "email", label: "Primary Email", width: "w-56" },
   { key: "tier", label: "Confidence", width: "w-48" },
 ];
@@ -120,12 +120,33 @@ export function EmailCompanyTable({
                     <span className={cn("size-2 rounded-full", STATUS_DOT[company.status])} />
                     <span className="text-xs capitalize text-muted-foreground">{company.status}</span>
                   </div>
-                  <div className="w-40 truncate pr-2 text-xs text-muted-foreground">
-                    {company.website_source ? WEBSITE_SOURCE_LABELS[company.website_source] : "—"}
+                  <div className="w-52 truncate pr-2 text-xs" onClick={(e) => e.stopPropagation()}>
+                    {company.resolved_url ? (
+                      <a
+                        href={company.resolved_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-primary hover:underline"
+                        title={company.resolved_url}
+                      >
+                        {company.resolved_url.replace(/^https?:\/\//, "")}
+                      </a>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                    {company.website_source && company.website_source !== "provided" && (
+                      <span className="ml-1 text-muted-foreground">
+                        ({WEBSITE_SOURCE_LABELS[company.website_source].toLowerCase()})
+                      </span>
+                    )}
                   </div>
                   <div className="w-56 truncate pr-2 text-sm">{company.primary_email || "—"}</div>
                   <div className="w-48">
-                    <EmailTierBadge tier={company.primary_tier} confidence={company.primary_confidence} />
+                    <EmailTierBadge
+                      tier={company.primary_tier}
+                      confidence={company.primary_confidence}
+                      websiteSource={company.website_source}
+                    />
                   </div>
                 </div>
               );
@@ -195,7 +216,11 @@ function CompanyDetailSheet({ company, onClose }: { company: EmailCompany | null
                   <p className="text-xs text-muted-foreground capitalize">{company.primary_label}</p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <EmailTierBadge tier={company.primary_tier} confidence={company.primary_confidence} />
+                  <EmailTierBadge
+                    tier={company.primary_tier}
+                    confidence={company.primary_confidence}
+                    websiteSource={company.website_source}
+                  />
                   <Button variant="ghost" size="icon" className="size-7" onClick={() => copyToClipboard(company.primary_email!)}>
                     <Copy className="size-3.5" />
                   </Button>
@@ -222,7 +247,7 @@ function CompanyDetailSheet({ company, onClose }: { company: EmailCompany | null
                       <p className="text-xs text-muted-foreground capitalize">{c.label}</p>
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
-                      <EmailTierBadge tier={c.tier} confidence={c.confidence} />
+                      <EmailTierBadge tier={c.tier} confidence={c.confidence} websiteSource={company?.website_source} />
                       <Button variant="ghost" size="icon" className="size-7" onClick={() => copyToClipboard(c.email)}>
                         <Copy className="size-3.5" />
                       </Button>

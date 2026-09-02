@@ -30,7 +30,7 @@ from backend.core.job_control import (
     release_run_lock,
     request_resume,
 )
-from backend.core.llm_router import pick_groq_fallback_key
+from backend.core.llm_router import pick_groq_fallback_key, pick_jina_key
 from backend.core.models import SSEEvent, SSEEventType
 from backend.core.user_keys import load_user_keys
 from backend.db.email_models import EmailBatch, EmailCompanyInput
@@ -129,6 +129,13 @@ class EmailJobEngine:
         pending = [c for c in companies if c.id not in completed_ids]
 
         groq_api_key, _ = pick_groq_fallback_key(user_keys)
+        # Same priority rule as the product-generation JobEngine: a user's
+        # own paid Jina key (if they've added one in Settings) gets used
+        # instead of the public tier, which - confirmed via real testing,
+        # see crawler.py's MAX_CONCURRENT_JINA_FETCHES comment - hard rate
+        # limits concurrent requests per IP hard enough to be the single
+        # biggest cause of "no email found" results under any real load.
+        jina_api_key, _ = pick_jina_key(user_keys)
 
         semaphore = asyncio.Semaphore(concurrency)
         state = {"paused": False, "cancelled": False}
@@ -167,6 +174,7 @@ class EmailJobEngine:
                         company.url,
                         redis=self.redis,
                         groq_api_key=groq_api_key,
+                        jina_api_key=jina_api_key,
                     )
 
                     async with self._checkpoint_lock:

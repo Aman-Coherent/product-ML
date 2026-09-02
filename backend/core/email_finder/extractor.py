@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-from backend.core.email_finder.domain_utils import registrable_domain
+from backend.core.email_finder.domain_utils import registrable_domain, same_organization
 from backend.core.email_finder.models import TIER_CONFIDENCE, EmailCandidate, EmailLabel, EmailTier
 
 EMAIL_REGEX = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,24}")
@@ -133,7 +133,11 @@ def extract_emails(
             continue
 
         local, _, domain = email.partition("@")
-        same_domain = site_domain_norm is not None and registrable_domain(domain) == site_domain_norm
+        # same_organization (SLD-only, e.g. "bosch" for both bosch.com and
+        # bosch.de) rather than an exact registrable-domain match - see its
+        # own docstring for why a multinational's own country-market
+        # domain must count as fully trustworthy, not "offsite".
+        same_domain = site_domain_norm is not None and same_organization(domain, site_domain_norm)
         if not same_domain and not allow_offsite:
             continue
         tier = EmailTier.SCRAPED_VERIFIED if same_domain else EmailTier.SCRAPED_OFFSITE

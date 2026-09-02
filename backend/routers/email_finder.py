@@ -493,8 +493,16 @@ async def export_batch(
     tmp_dir.mkdir(parents=True, exist_ok=True)
     out_path = tmp_dir / f"{batch.name.replace(' ', '_')}_{batch_id[:8]}.{fmt}"
 
+    # row_id (the row's position in the originally uploaded CSV, 1-based to
+    # match how a person counts rows in a spreadsheet) and id (this row's
+    # own permanent database id) are both included so an export can always
+    # be matched back to the source file OR re-looked-up later, even after
+    # re-sorting/filtering in Excel - previously the export had NO
+    # identifying column at all, so once opened in a spreadsheet there was
+    # no reliable way to tell which output row corresponded to which input
+    # row.
     fields = [
-        "company_name", "location", "input_url", "resolved_url", "website_source",
+        "row_id", "id", "company_name", "location", "input_url", "resolved_url", "website_source",
         "primary_email", "primary_label", "primary_tier", "primary_confidence",
         "primary_source_page", "alternate_emails", "status", "error_message",
     ]
@@ -502,6 +510,8 @@ async def export_batch(
     def _row_dict(c: EmailCompanyInput) -> dict:
         alternates = json.loads(c.alternate_emails_json) if c.alternate_emails_json else []
         return {
+            "row_id": c.row_index + 1,
+            "id": c.id,
             "company_name": c.company_name,
             "location": c.location,
             "input_url": c.url,

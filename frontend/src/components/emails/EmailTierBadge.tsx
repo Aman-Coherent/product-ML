@@ -1,33 +1,49 @@
 import { Badge } from "@/components/ui/badge";
-import type { EmailTier } from "@/lib/api";
+import type { EmailTier, WebsiteSource } from "@/lib/api";
 
-// Worst to best - mirrors backend/core/email_finder/models.py's EmailTier
-// exactly, including the ordering. Colors deliberately escalate red -> amber
-// -> green so "how much can I trust this" is legible at a glance without
-// reading the label - this is the whole point of tiering (see the backend
-// pipeline's module docstring): a guessed, unverified address must never
-// LOOK as trustworthy as one scraped straight off the company's own site.
-const TIER_STYLES: Record<EmailTier, string> = {
-  pattern_unverified: "bg-red-500/15 text-red-500 border-red-500/30",
-  pattern_catchall: "bg-amber-500/15 text-amber-500 border-amber-500/30",
-  pattern_smtp_verified: "bg-amber-500/15 text-amber-600 border-amber-500/30",
-  scraped_offsite: "bg-blue-500/15 text-blue-500 border-blue-500/30",
-  scraped_verified: "bg-emerald-500/15 text-emerald-500 border-emerald-500/30",
+// Simplified to exactly 3 plain-English categories per user request (the
+// original 5 backend tier names - scraped_verified/offsite,
+// pattern_smtp_verified/catchall/unverified - were causing real confusion
+// in the UI even though they're meaningful internally for scoring/ranking).
+// The 3 categories combine two backend facts into the one distinction that
+// actually matters to someone reading the table:
+//   1. Was the EMAIL actually found written on a real page, or guessed?
+//   2. If found, was it on the website THEY gave us, or one we had to find
+//      ourselves (web search / guessed domain)?
+type SimpleCategory = "found_given" | "found_discovered" | "guessed";
+
+function categorize(tier: EmailTier, websiteSource: WebsiteSource | null): SimpleCategory {
+  const wasFound = tier === "scraped_verified" || tier === "scraped_offsite";
+  if (!wasFound) return "guessed";
+  return websiteSource === "provided" ? "found_given" : "found_discovered";
+}
+
+const STYLES: Record<SimpleCategory, string> = {
+  found_given: "bg-emerald-500/15 text-emerald-500 border-emerald-500/30",
+  found_discovered: "bg-blue-500/15 text-blue-500 border-blue-500/30",
+  guessed: "bg-amber-500/15 text-amber-600 border-amber-500/30",
 };
 
-const TIER_LABELS: Record<EmailTier, string> = {
-  pattern_unverified: "Guessed (unverified)",
-  pattern_catchall: "Guessed (domain accepts all)",
-  pattern_smtp_verified: "Guessed (mail server confirmed)",
-  scraped_offsite: "Found on site (other domain)",
-  scraped_verified: "Found on official site",
+const LABELS: Record<SimpleCategory, string> = {
+  found_given: "Found on given website",
+  found_discovered: "Found on website we discovered",
+  guessed: "Guessed (not found)",
 };
 
-export function EmailTierBadge({ tier, confidence }: { tier: EmailTier | null; confidence?: number | null }) {
+export function EmailTierBadge({
+  tier,
+  confidence,
+  websiteSource,
+}: {
+  tier: EmailTier | null;
+  confidence?: number | null;
+  websiteSource?: WebsiteSource | null;
+}) {
   if (!tier) return <span className="text-xs text-muted-foreground">—</span>;
+  const category = categorize(tier, websiteSource ?? null);
   return (
-    <Badge variant="outline" className={TIER_STYLES[tier]}>
-      {TIER_LABELS[tier]}
+    <Badge variant="outline" className={STYLES[category]}>
+      {LABELS[category]}
       {confidence != null && <span className="ml-1 opacity-70">{Math.round(confidence * 100)}%</span>}
     </Badge>
   );
