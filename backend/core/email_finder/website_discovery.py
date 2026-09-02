@@ -18,6 +18,7 @@ result.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 
@@ -30,6 +31,20 @@ from backend.core.email_finder.crawler import site_domain
 logger = logging.getLogger("email_finder.website_discovery")
 
 SEARCH_TIMEOUT = 20.0
+
+# Same class of bug as crawler.py's Jina fetching, and the same fix -
+# confirmed by the numbers on a real large batch: with no retry and no
+# concurrency cap on this call, a huge majority of companies (with no CSV
+# URL) were ending up in "website not found" even though only a small
+# fraction genuinely have no discoverable site. This call previously had
+# NEITHER protection at all - a single 429/timeout from Groq silently gave
+# up on search entirely and fell straight through to the much weaker
+# domain-guessing fallback, for every company unlucky enough to hit it
+# under real concurrent load.
+MAX_CONCURRENT_SEARCHES = 5
+_search_semaphore = asyncio.Semaphore(MAX_CONCURRENT_SEARCHES)
+SEARCH_RATE_LIMIT_RETRIES = 3
+SEARCH_RATE_LIMIT_BACKOFF_SECONDS = 1.5
 
 # Directory/social/reference sites compound-beta's web_search commonly
 # surfaces instead of (or alongside) the real official site - never a
@@ -75,23 +90,42 @@ async def find_official_website(
         'official website with reasonable confidence, respond with exactly: NONE'
     )
 
-    try:
+    content: str | None = None
+    async with _search_semaphore:
         async with httpx.AsyncClient(timeout=SEARCH_TIMEOUT) as client:
-            resp = await client.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers={"Authorization": f"Bearer {groq_api_key}", "Groq-Model-Version": "latest"},
-                json={
-                    "model": "groq/compound",
-                    "messages": [{"role": "user", "content": prompt}],
-                    "compound_custom": {"tools": {"enabled_tools": ["web_search"]}},
-                    "temperature": 0,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            content = data["choices"][0]["message"]["content"]
-    except Exception as exc:
-        logger.info("website search failed for %r: %s", company_name, exc)
+            for attempt in range(SEARCH_RATE_LIMIT_RETRIES + 1):
+                try:
+                    resp = await client.post(
+                        "https://api.groq.com/openai/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {groq_api_key}", "Groq-Model-Version": "latest"},
+                        json={
+                            "model": "groq/compound",
+                            "messages": [{"role": "user", "content": prompt}],
+                            "compound_custom": {"tools": {"enabled_tools": ["web_search"]}},
+                            "temperature": 0,
+                        },
+                    )
+                    if resp.status_code == 429 and attempt < SEARCH_RATE_LIMIT_RETRIES:
+                        # Same transient-not-permanent reasoning as
+                        # crawler.py's Jina 429 handling - worth a bounded
+                        # retry rather than silently giving up on search
+                        # and falling through to the weaker domain-guess
+                        # fallback for this company.
+                        logger.info(
+                            "Groq search rate-limited (429) for %r, retrying (attempt %d)",
+                            company_name, attempt + 1,
+                        )
+                        await asyncio.sleep(SEARCH_RATE_LIMIT_BACKOFF_SECONDS * (attempt + 1))
+                        continue
+                    resp.raise_for_status()
+                    data = resp.json()
+                    content = data["choices"][0]["message"]["content"]
+                    break
+                except Exception as exc:
+                    logger.info("website search failed for %r: %s", company_name, exc)
+                    return None
+
+    if content is None:
         return None
 
     if "NONE" in content.upper() and not _extract_urls(content):

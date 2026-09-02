@@ -405,6 +405,9 @@ _CATEGORY_FILTERS = {
     "guessed": lambda q: q.where(
         EmailCompanyInput.primary_tier.in_(("pattern_smtp_verified", "pattern_catchall", "pattern_unverified"))
     ),
+    "not_found": lambda q: q.where(
+        EmailCompanyInput.status == "done", EmailCompanyInput.primary_tier.is_(None)
+    ),
 }
 
 
@@ -414,7 +417,7 @@ async def list_companies(
     cursor: str | None = None,
     limit: int = Query(default=PAGE_SIZE_DEFAULT, le=PAGE_SIZE_MAX),
     status_filter: str | None = Query(default=None, alias="status"),
-    category: str | None = Query(default=None, pattern="^(found_given|found_discovered|guessed)$"),
+    category: str | None = Query(default=None, pattern="^(found_given|found_discovered|guessed|not_found)$"),
     user: AuthenticatedUser = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
@@ -500,12 +503,31 @@ async def batch_stats(
             .group_by(EmailCompanyInput.primary_tier, EmailCompanyInput.website_source)
         )
     ).all()
-    by_category = {"found_given": 0, "found_discovered": 0, "guessed": 0}
+    by_category = {"found_given": 0, "found_discovered": 0, "guessed": 0, "not_found": 0}
     for tier, source, count in by_category_rows:
         if tier in ("scraped_verified", "scraped_offsite"):
             by_category["found_given" if source == "provided" else "found_discovered"] += count
         else:
             by_category["guessed"] += count
+
+    # A completed row with NO tier at all (see pipeline.py: primary_tier
+    # only ends up set once find_company_email produces some candidate -
+    # scraped or guessed) means no website could be established at all,
+    # nothing to guess a pattern against either. Previously invisible in
+    # this breakdown entirely - the three counts above didn't add up to
+    # "done" on a real batch, with no way to tell why (see this router's
+    # docstring history / the confirmed real case that surfaced it).
+    by_category["not_found"] = (
+        await session.execute(
+            select(func.count())
+            .select_from(EmailCompanyInput)
+            .where(
+                EmailCompanyInput.batch_id == batch_id,
+                EmailCompanyInput.status == "done",
+                EmailCompanyInput.primary_tier.is_(None),
+            )
+        )
+    ).scalar_one()
 
     return {
         "total_companies": total,

@@ -211,7 +211,7 @@ export interface EmailCompanyPage {
   total: number;
 }
 
-export type EmailCategory = "found_given" | "found_discovered" | "guessed";
+export type EmailCategory = "found_given" | "found_discovered" | "guessed" | "not_found";
 
 export interface EmailBatchStats {
   total_companies: number;

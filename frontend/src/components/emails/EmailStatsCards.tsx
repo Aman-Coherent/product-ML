@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, Compass, HelpCircle, Mail, Timer } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Compass, HelpCircle, Mail, SearchX, Timer } from "lucide-react";
 
 import type { EmailBatch, EmailBatchStats, EmailCategory } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -30,6 +30,7 @@ export function EmailStatsCards({
     { key: "found_given", label: "Found on given website", icon: Mail, color: "text-emerald-500" },
     { key: "found_discovered", label: "Found on discovered website", icon: Compass, color: "text-blue-500" },
     { key: "guessed", label: "Guessed (not found)", icon: HelpCircle, color: "text-amber-600" },
+    { key: "not_found", label: "No website found", icon: SearchX, color: "text-red-500" },
   ];
 
   return (
@@ -46,7 +47,7 @@ export function EmailStatsCards({
         ))}
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {categoryCards.map((c) => {
           const isActive = activeCategory === c.key;
           const value = byCategory?.[c.key] ?? 0;

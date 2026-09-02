@@ -4,11 +4,25 @@ Per-company orchestrator: the one entry point the job engine calls.
 Fallback chain (each step only runs if the previous one produced nothing):
 
   1. Website is KNOWN (from the CSV) -> crawl it -> extract real emails.
-  2. Website UNKNOWN -> Groq compound-beta web search for the official
-     site -> if found, crawl it -> extract real emails.
-  3. Still no website -> guess candidate domains from the company name
-     (+ country signal from location) -> keep the first one that actually
-     resolves in DNS -> crawl THAT -> extract real emails.
+  2. Website UNKNOWN -> guess candidate domains from the company name
+     (+ country signal from location) -> try up to 3 DNS-resolving
+     candidates, in order, until one actually renders real content ->
+     extract real emails from it.
+  3. Still no website (not one guessed candidate even rendered) -> Groq
+     compound-beta web search for the official site -> if found, crawl it
+     -> extract real emails.
+
+  Steps 2 and 3 are DELIBERATELY in this order, not the reverse: domain-
+  guessing is free and unlimited, while the AI web search costs a scarce
+  API call - confirmed live that the shared system Groq key has a hard
+  250-request/DAY cap on the `groq/compound` model, which a large batch
+  (tens of thousands of companies with no CSV URL) exhausts almost
+  immediately, after which every subsequent search silently fails and
+  falls through anyway. Trying the free, now-solid guess step first (after
+  today's fixes: umlaut transliteration, hyphen-splitting, multi-candidate
+  DNS+render confirmation) means the expensive step is only spent on the
+  minority of companies the guess genuinely can't resolve.
+
   4. Still nothing (a real, DNS-confirmed domain exists but no email was
      found on any of its pages) -> generate common company-inbox local
      parts (info@, contact@, sales@...) on that domain and try to verify
@@ -110,6 +124,57 @@ async def _try_pattern_fallback(domain: str, redis: Redis | None) -> list[EmailC
     ]
 
 
+async def _try_candidate_domains(
+    candidate_domains: list[str],
+    redis: Redis | None,
+    location: str | None,
+    jina_api_key: str | None,
+    company_name: str,
+) -> tuple[str, list, list[EmailCandidate]] | None:
+    """Tries each DNS-resolving candidate domain in order (see
+    dns_utils.resolving_domains), crawling each one. Returns as soon as one
+    both renders real content AND has a visible email. If none have an
+    email but at least one genuinely rendered, returns that first
+    renderable one anyway (as a real, confirmed site pattern-fallback can
+    still apply to - see find_company_email). Returns None ONLY if not a
+    single candidate could even be rendered at all - "this domain resolves
+    in DNS" is a much weaker signal than it looks (see resolving_domains'
+    own docstring for the confirmed real case - a real, unrelated,
+    MX-having domain that couldn't actually be fetched at all - this
+    guards against)."""
+    first_rendered: tuple[str, list] | None = None
+
+    for candidate_domain in candidate_domains:
+        candidate_url = f"https://{candidate_domain}"
+        candidate_pages = await crawl_company_site(
+            candidate_url,
+            redis,
+            allow_offsite=False,
+            location=location,
+            jina_api_key=jina_api_key,
+            company_name=company_name,
+        )
+        if not any(p.success for p in candidate_pages):
+            continue
+
+        if first_rendered is None:
+            first_rendered = (candidate_domain, candidate_pages)
+
+        candidate_emails: list[EmailCandidate] = []
+        for page in candidate_pages:
+            if page.success:
+                candidate_emails.extend(
+                    extract_emails(page.content, page.url, candidate_domain, False, company_name)
+                )
+        if candidate_emails:
+            return candidate_url, candidate_pages, candidate_emails
+
+    if first_rendered is not None:
+        fallback_domain, fallback_pages = first_rendered
+        return f"https://{fallback_domain}", fallback_pages, []
+    return None
+
+
 async def find_company_email(
     company_id: str,
     company_name: str,
@@ -125,113 +190,58 @@ async def find_company_email(
     try:
         resolved_url: str | None = None
         website_source = WebsiteSource.NOT_FOUND
-
-        if url and url.strip():
-            resolved_url = normalize_url(url)
-            website_source = WebsiteSource.PROVIDED
-        else:
-            found = await website_discovery.find_official_website(company_name, location, groq_api_key, redis)
-            if found:
-                resolved_url = found
-                website_source = WebsiteSource.WEB_SEARCH
-
         all_candidates: list[EmailCandidate] = []
 
-        # Only a URL the user directly supplied is trusted enough to accept
-        # an off-domain email match (e.g. a small business listing a gmail
-        # address on its own real site). WEB_SEARCH and DOMAIN_GUESS are
-        # both inferred - if the inference itself is wrong, an off-domain
-        # email on that wrong page is most likely a completely unrelated
-        # third party's address (see crawler.py's parked-domain note for a
-        # confirmed real example of exactly this). Restricting those to
-        # same-domain-only matches means a wrong guess just yields "nothing
-        # found" instead of a confidently-wrong result.
-        def _allow_offsite() -> bool:
-            return website_source == WebsiteSource.PROVIDED
-
-        if resolved_url:
+        if url and url.strip():
+            # Only a URL the user directly supplied is trusted enough to
+            # accept an off-domain email match (e.g. a small business
+            # listing a gmail address on its own real site) - WEB_SEARCH
+            # and DOMAIN_GUESS are both inferred, so an off-domain email
+            # on an inferred page is most likely a stranger's address (see
+            # crawler.py's parked-domain note for a confirmed real
+            # example). allow_offsite=True only here.
+            resolved_url = normalize_url(url)
+            website_source = WebsiteSource.PROVIDED
             pages = await crawl_company_site(
-                resolved_url,
-                redis,
-                allow_offsite=_allow_offsite(),
-                location=location,
-                jina_api_key=jina_api_key,
-                company_name=company_name,
+                resolved_url, redis, allow_offsite=True, location=location,
+                jina_api_key=jina_api_key, company_name=company_name,
             )
             domain = site_domain(resolved_url)
             for page in pages:
                 result.pages_checked.append(page.url)
                 if page.success:
-                    all_candidates.extend(
-                        extract_emails(page.content, page.url, domain, _allow_offsite(), company_name)
-                    )
-
-        if not all_candidates and not resolved_url:
-            # No URL given and web search found nothing - last resort:
-            # guess a domain from the company name itself.
-            #
-            # Deliberately tries UP TO 3 DNS-resolving candidates, not just
-            # the first one - "this domain resolves in DNS" is a much
-            # weaker signal than it sounds. Confirmed real case: a
-            # company's actual site is "bienen-wiese.de", but the guessed
-            # no-hyphen variant "bienenwiese.de" is ALSO a real, unrelated,
-            # MX-having domain that happened to win the old first-match-
-            # wins check - and its page couldn't even be rendered at all.
-            # The old code still committed to it and guessed an email on
-            # it anyway. Now: only COMMIT to a guessed domain once it's
-            # actually been confirmed to render real content, trying the
-            # next candidate otherwise.
+                    all_candidates.extend(extract_emails(page.content, page.url, domain, True, company_name))
+        else:
+            # No URL given - try the free, unlimited domain-guess FIRST
+            # (see this module's docstring for why the order matters).
             guesses = generate_domain_candidates(company_name, location)
             candidate_domains = await dns_utils.resolving_domains(guesses, redis, limit=3)
+            guessed = await _try_candidate_domains(candidate_domains, redis, location, jina_api_key, company_name)
 
-            # Falls back to the first candidate that renders REAL content
-            # (even with no visible email - pattern-fallback below still
-            # applies to it) only if NONE of the tried candidates have an
-            # actual email - keep searching across all of them for a real
-            # find first, rather than settling for the first renderable
-            # one the moment it happens to have nothing visible, when a
-            # later candidate might be the one that actually has it.
-            first_rendered: tuple[str, list] | None = None
-
-            for candidate_domain in candidate_domains:
-                candidate_url = f"https://{candidate_domain}"
-                candidate_pages = await crawl_company_site(
-                    candidate_url,
-                    redis,
-                    allow_offsite=False,
-                    location=location,
-                    jina_api_key=jina_api_key,
-                    company_name=company_name,
-                )
-                if not any(p.success for p in candidate_pages):
-                    # DNS said this domain exists, but nothing on it could
-                    # actually be fetched - zero real evidence this is even
-                    # a live site, let alone the right company's. Don't
-                    # guess an email against it; try the next candidate.
-                    continue
-
-                if first_rendered is None:
-                    first_rendered = (candidate_domain, candidate_pages)
-
-                candidate_emails: list[EmailCandidate] = []
-                for page in candidate_pages:
-                    if page.success:
-                        candidate_emails.extend(
-                            extract_emails(page.content, page.url, candidate_domain, False, company_name)
-                        )
-
-                if candidate_emails:
-                    resolved_url = candidate_url
-                    website_source = WebsiteSource.DOMAIN_GUESS
-                    result.pages_checked.extend(p.url for p in candidate_pages)
-                    all_candidates.extend(candidate_emails)
-                    break
-
-            if not all_candidates and first_rendered is not None:
-                fallback_domain, fallback_pages = first_rendered
-                resolved_url = f"https://{fallback_domain}"
+            if guessed is not None:
+                resolved_url, guess_pages, guess_candidates = guessed
                 website_source = WebsiteSource.DOMAIN_GUESS
-                result.pages_checked.extend(p.url for p in fallback_pages)
+                result.pages_checked.extend(p.url for p in guess_pages)
+                all_candidates.extend(guess_candidates)
+            else:
+                # Not one guessed candidate even rendered - spend the
+                # scarce, quota-limited AI web search as a secondary
+                # attempt rather than the first thing tried.
+                found = await website_discovery.find_official_website(company_name, location, groq_api_key, redis)
+                if found:
+                    resolved_url = found
+                    website_source = WebsiteSource.WEB_SEARCH
+                    pages = await crawl_company_site(
+                        resolved_url, redis, allow_offsite=False, location=location,
+                        jina_api_key=jina_api_key, company_name=company_name,
+                    )
+                    domain = site_domain(resolved_url)
+                    for page in pages:
+                        result.pages_checked.append(page.url)
+                        if page.success:
+                            all_candidates.extend(
+                                extract_emails(page.content, page.url, domain, False, company_name)
+                            )
 
         if not all_candidates and resolved_url:
             # We have a confirmed-real domain but found no live email on it
