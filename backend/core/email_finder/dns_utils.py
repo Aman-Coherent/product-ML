@@ -84,12 +84,40 @@ async def first_resolving_domain(
     reporting nothing, since plenty of legitimate small businesses host mail
     elsewhere (Google Workspace on a subdomain, etc.) while still serving
     their main site off the guessed domain."""
-    first_a_only: str | None = None
+    results = await resolving_domains(candidates, redis, limit=1, require_mx=require_mx)
+    return results[0] if results else None
+
+
+async def resolving_domains(
+    candidates: list[str], redis: Redis | None = None, limit: int = 3, require_mx: bool = False
+) -> list[str]:
+    """Like first_resolving_domain, but returns up to `limit` resolving
+    candidates instead of committing to just one.
+
+    This exists because "does DNS say this domain exists" is a much weaker
+    signal than it looks - confirmed real case: a company's actual site is
+    "bienen-wiese.de", but the guessed no-hyphen variant "bienenwiese.de"
+    is ALSO a real, unrelated, MX-having registered domain that happens to
+    exist. Under the old first-match-wins behavior, that unrelated domain
+    won the DNS check (tried first, since guessing tries the concatenated
+    form before the hyphenated one) and the pipeline committed to it
+    permanently - even though its page couldn't even be fetched at all,
+    let alone shown to be the real company's site. Returning several
+    candidates lets the caller (pipeline.py) actually try rendering each
+    one and only settle on the first that produces real content, instead
+    of trusting DNS resolution alone to mean "this is the right domain."""
+    mx_matches: list[str] = []
+    a_only_matches: list[str] = []
     for domain in candidates:
+        if len(mx_matches) >= limit:
+            break
         if await has_mx(domain, redis):
-            return domain
-        if first_a_only is None and await has_a_record(domain, redis):
-            first_a_only = domain
+            mx_matches.append(domain)
+        elif not require_mx and len(a_only_matches) < limit and await has_a_record(domain, redis):
+            a_only_matches.append(domain)
+
     if require_mx:
-        return None
-    return first_a_only
+        return mx_matches[:limit]
+    # MX-confirmed candidates ranked ahead of A-record-only ones, same
+    # preference as the original single-winner behavior.
+    return (mx_matches + a_only_matches)[:limit]

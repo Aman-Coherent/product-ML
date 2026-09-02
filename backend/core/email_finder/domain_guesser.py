@@ -143,6 +143,22 @@ def _slugify(words: list[str], sep: str = "") -> str:
     return sep.join(p for p in pieces if p)
 
 
+def _split_words(company_name: str) -> list[str]:
+    """Splits on whitespace AND internal hyphens, not whitespace alone.
+
+    Confirmed real bug this fixes: "Bienen-Wiese" (no space, just an
+    internal hyphen) was treated as a single word "Bienen-Wiese" - so the
+    "hyphenated" domain candidate variant (built by re-joining word pieces
+    with "-") had nothing to actually re-join, and just collapsed to the
+    same concatenated guess. The real domain, "bienen-wiese.de", was never
+    even generated as a candidate at all - not "guessed and rejected", just
+    never attempted in the first place. Splitting "Bienen-Wiese" into
+    ["Bienen", "Wiese"] up front means the hyphenated candidate correctly
+    reconstructs "bienen-wiese", while the concatenated one still comes out
+    identical either way ("bienenwiese")."""
+    return [w for w in re.split(r"[\s\-]+", company_name.strip()) if w]
+
+
 def company_name_slug(company_name: str) -> str:
     """The same normalized, legal-suffix-stripped slug generate_domain_candidates
     builds internally (e.g. "Colt Material Solutions Ltd" -> "coltmaterialsolutions"),
@@ -150,7 +166,7 @@ def company_name_slug(company_name: str) -> str:
     COMPANY NAME directly - not just against whatever site it happened to
     be found on. See domain_utils.same_organization_or_name_match's
     docstring for the real case this fixes."""
-    raw_words = [w for w in re.split(r"\s+", company_name.strip()) if w]
+    raw_words = _split_words(company_name)
     if not raw_words:
         return ""
     core_words = _strip_legal_suffix(raw_words) or raw_words
@@ -163,7 +179,7 @@ def generate_domain_candidates(company_name: str, location: str | None = None, l
     expected to DNS-validate before trusting any of these - see
     dns_utils.first_resolving_domain.
     """
-    raw_words = [w for w in re.split(r"\s+", company_name.strip()) if w]
+    raw_words = _split_words(company_name)
     if not raw_words:
         return []
 
