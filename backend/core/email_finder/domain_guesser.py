@@ -10,6 +10,34 @@ guessed address, so a wrong guess here just costs one cheap DNS lookup.
 from __future__ import annotations
 
 import re
+import unicodedata
+
+# German business domains use a well-established ASCII transliteration for
+# umlauts - "mueller.de", never "mller.de" or an IDN "müller.de" - but the
+# old slugify just stripped any non a-z0-9 character outright, silently
+# DELETING the letter instead of transliterating it. Confirmed real impact:
+# "Müller GmbH" -> "mller" (should be "muellergmbh" minus the stripped
+# suffix -> "mueller"), "Schäfer Industries" -> "schfer" (should be
+# "schaefer"). These are extremely common German surname-based company
+# names, not rare ones - every domain guess for any of them was wrong.
+# Case matters for the map (both cases listed) since this runs before
+# lowering, so "Ä"/"ä" both need an entry.
+_GERMAN_TRANSLITERATIONS = {
+    "ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss",
+    "Ä": "Ae", "Ö": "Oe", "Ü": "Ue",
+}
+
+
+def _transliterate(text: str) -> str:
+    """German umlauts get the real domain-naming convention (ae/oe/ue/ss).
+    Any OTHER accented Latin letter (French/Spanish/Italian/etc., e.g.
+    "café", "façade") falls back to simply dropping the accent (cafe,
+    facade) - that's the actual real-world convention for those languages
+    (unlike German, they don't do a multi-letter substitution)."""
+    for char, replacement in _GERMAN_TRANSLITERATIONS.items():
+        text = text.replace(char, replacement)
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(c for c in decomposed if not unicodedata.combining(c))
 
 # Pure legal-entity suffixes only - NOT generic business words like
 # "Technologies"/"Systems"/"Solutions", which are frequently part of the
@@ -106,8 +134,13 @@ def cctld_for_location(location: str | None) -> str | None:
 
 
 def _slugify(words: list[str], sep: str = "") -> str:
-    joined = sep.join(re.sub(r"[^a-z0-9]", "", w.lower()) for w in words)
-    return joined
+    # A word that's pure punctuation ("&", "+") transliterates/strips down
+    # to an empty string - joining those in with `sep` produced ugly
+    # doubled hyphens (e.g. "Bär & Söhne" -> "baer--soehne"). Dropping
+    # empty pieces before joining keeps it clean ("baer-soehne") without
+    # changing anything about the non-separator (sep="") concat form.
+    pieces = [re.sub(r"[^a-z0-9]", "", _transliterate(w).lower()) for w in words]
+    return sep.join(p for p in pieces if p)
 
 
 def company_name_slug(company_name: str) -> str:
