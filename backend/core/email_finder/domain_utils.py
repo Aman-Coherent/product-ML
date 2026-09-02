@@ -7,6 +7,7 @@ pattern-guesser, which then generated nonsense addresses like
 "info@www.caterpillar.com"."""
 from __future__ import annotations
 
+import re
 from urllib.parse import urlparse
 
 
@@ -33,8 +34,19 @@ def organization_name(domain: str) -> str:
     full public-suffix-list-correct split for anything else) - two
     unrelated companies coincidentally sharing an exact brand-name string
     across different TLDs is vanishingly rare, and even if it happened the
-    cost is a slightly-too-generous confidence label, not a wrong email."""
-    return registrable_domain(domain).split(".")[0]
+    cost is a slightly-too-generous confidence label, not a wrong email.
+
+    Punctuation (hyphens especially) is stripped from the SLD, not just
+    the TLD/www - confirmed real bug this fixes: stahlcenterleipzig.de
+    (the site) vs scl@stahlcenter-leipzig.de (the real email actually on
+    that site) were never matching AT ALL, on either the site-domain check
+    OR the company-name check, purely because this function kept the
+    hyphen ("stahlcenter-leipzig") while company_name_slug() strips all
+    punctuation from the company name ("stahlcenterleipzig") - two sides
+    of the same comparison using different normalization is exactly the
+    kind of bug that silently fails every time, not just occasionally."""
+    sld = registrable_domain(domain).split(".")[0]
+    return re.sub(r"[^a-z0-9]", "", sld.lower())
 
 
 def same_organization(domain_a: str, domain_b: str) -> bool:
