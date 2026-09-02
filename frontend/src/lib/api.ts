@@ -153,6 +153,71 @@ export interface ProviderUsageSummary {
   tokens_month: number;
 }
 
+// ─────────────────────────── Email finder ───────────────────────────
+
+export interface EmailBatch {
+  id: string;
+  name: string;
+  status: "PENDING" | "QUEUED" | "RUNNING" | "PAUSED" | "COMPLETED" | "FAILED" | "CANCELLED";
+  concurrency: number;
+  total: number;
+  done: number;
+  failed: number;
+  error_message: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+}
+
+export type EmailTier =
+  | "scraped_verified"
+  | "scraped_offsite"
+  | "pattern_smtp_verified"
+  | "pattern_catchall"
+  | "pattern_unverified";
+
+export type WebsiteSource = "provided" | "web_search" | "domain_guess" | "not_found";
+
+export interface EmailCandidateOut {
+  email: string;
+  label: string;
+  tier: EmailTier;
+  confidence: number;
+  source_page: string | null;
+}
+
+export interface EmailCompany {
+  id: string;
+  row_index: number;
+  company_name: string;
+  location: string | null;
+  url: string | null;
+  status: "pending" | "running" | "done" | "failed";
+  resolved_url: string | null;
+  website_source: WebsiteSource | null;
+  primary_email: string | null;
+  primary_label: string | null;
+  primary_tier: EmailTier | null;
+  primary_confidence: number | null;
+  primary_source_page: string | null;
+  alternate_emails: EmailCandidateOut[];
+  processing_time_ms: number | null;
+  error_message: string | null;
+}
+
+export interface EmailCompanyPage {
+  companies: EmailCompany[];
+  next_cursor: string | null;
+  total: number;
+}
+
+export interface EmailBatchStats {
+  total_companies: number;
+  with_email: number;
+  by_tier: Record<string, number>;
+  by_website_source: Record<string, number>;
+}
+
 // ─────────────────────────── Projects ───────────────────────────
 
 export const api = {
@@ -270,6 +335,72 @@ export const api = {
       "/api/jobs/circuit-status/jina",
       token
     ),
+
+  // ─────────────────────────── Email finder ───────────────────────────
+  // Independent feature/section (see Dashboard sidebar "Email Finder") -
+  // its own batches, not tied to Projects/Jobs at all. Reuses the same
+  // `request()` helper, error handling, and SSE stream endpoint (streamUrl
+  // above is already generic over any id string) as everything else here.
+
+  listEmailBatches: (token: string) => request<EmailBatch[]>("/api/email-finder/batches", token),
+
+  createEmailBatch: (token: string, body: { name: string }) =>
+    request<EmailBatch>("/api/email-finder/batches", token, { method: "POST", body: JSON.stringify(body) }),
+
+  getEmailBatch: (token: string, id: string) => request<EmailBatch>(`/api/email-finder/batches/${id}`, token),
+
+  deleteEmailBatch: (token: string, id: string) =>
+    request<{ status: string }>(`/api/email-finder/batches/${id}`, token, { method: "DELETE" }),
+
+  uploadEmailCsv: (token: string, batchId: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<UploadCsvResult>(`/api/email-finder/batches/${batchId}/upload-csv`, token, {
+      method: "POST",
+      body: form,
+    });
+  },
+
+  startEmailBatch: (token: string, batchId: string, concurrency?: number) =>
+    request<EmailBatch>(`/api/email-finder/batches/${batchId}/start`, token, {
+      method: "POST",
+      body: JSON.stringify({ concurrency: concurrency ?? 10 }),
+    }),
+
+  pauseEmailBatch: (token: string, batchId: string) =>
+    request<{ status: string }>(`/api/email-finder/batches/${batchId}/pause`, token, { method: "POST" }),
+
+  resumeEmailBatch: (token: string, batchId: string) =>
+    request<EmailBatch>(`/api/email-finder/batches/${batchId}/resume`, token, { method: "POST" }),
+
+  cancelEmailBatch: (token: string, batchId: string) =>
+    request<{ status: string }>(`/api/email-finder/batches/${batchId}/cancel`, token, { method: "POST" }),
+
+  retryFailedEmailCompanies: (token: string, batchId: string) =>
+    request<EmailBatch>(`/api/email-finder/batches/${batchId}/retry-failed`, token, { method: "POST" }),
+
+  listEmailCompanies: (
+    token: string,
+    params: { batchId: string; cursor?: string; limit?: number; status?: string }
+  ) => {
+    const search = new URLSearchParams();
+    if (params.cursor) search.set("cursor", params.cursor);
+    if (params.limit) search.set("limit", String(params.limit));
+    if (params.status) search.set("status", params.status);
+    const qs = search.toString();
+    return request<EmailCompanyPage>(
+      `/api/email-finder/batches/${params.batchId}/companies${qs ? `?${qs}` : ""}`,
+      token
+    );
+  },
+
+  getEmailBatchStats: (token: string, batchId: string) =>
+    request<EmailBatchStats>(`/api/email-finder/batches/${batchId}/stats`, token),
+
+  exportEmailBatchUrl: (batchId: string, fmt: "csv" | "json", token: string) => {
+    const search = new URLSearchParams({ fmt, token });
+    return `${BACKEND_URL}/api/email-finder/batches/${batchId}/export?${search.toString()}`;
+  },
 };
 
 export { BACKEND_URL };

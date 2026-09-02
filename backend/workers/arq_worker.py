@@ -17,9 +17,12 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 
 from backend.config import get_settings
-from backend.core.job_engine import JobEngine, _run_lock_key
+from backend.core.email_job_engine import EmailJobEngine
+from backend.core.job_control import run_lock_key as _run_lock_key
+from backend.core.job_engine import JobEngine
 from backend.core.usage_tracker import enable_usage_capture
 from backend.db.database import SessionLocal, init_db
+from backend.db.email_models import EmailBatch
 from backend.db.models import Job
 
 logging.basicConfig(level=logging.INFO)
@@ -37,6 +40,20 @@ async def process_job(ctx: dict, job_id: str) -> None:
         logger.exception("Job %s failed with an unhandled exception", job_id)
         raise
     logger.info("Finished job %s", job_id)
+
+
+async def process_email_batch(ctx: dict, batch_id: str) -> None:
+    """ARQ task for the email-finder feature - see EmailJobEngine's
+    docstring for how this mirrors process_job above."""
+    redis: Redis = ctx["redis"]
+    logger.info("Starting email batch %s", batch_id)
+    engine = EmailJobEngine(SessionLocal, redis, concurrency=10)
+    try:
+        await engine.run(batch_id)
+    except Exception:
+        logger.exception("Email batch %s failed with an unhandled exception", batch_id)
+        raise
+    logger.info("Finished email batch %s", batch_id)
 
 
 async def _reconcile_orphaned_jobs(redis: Redis) -> None:
@@ -87,12 +104,42 @@ async def _reconcile_orphaned_jobs(redis: Redis) -> None:
             )
 
 
+async def _reconcile_orphaned_email_batches(redis: Redis) -> None:
+    """Same reasoning as _reconcile_orphaned_jobs above, for EmailBatch."""
+    async with SessionLocal() as session:
+        result = await session.execute(select(EmailBatch).where(EmailBatch.status == "RUNNING"))
+        running_batches = list(result.scalars().all())
+        if not running_batches:
+            return
+
+        orphaned = []
+        for batch in running_batches:
+            if await redis.exists(_run_lock_key(batch.id)):
+                continue
+            batch.status = "FAILED"
+            batch.error_message = (
+                "Processing was interrupted (the worker process stopped unexpectedly) "
+                "and never resumed. Use Resume or Retry failed to continue."
+            )
+            batch.finished_at = datetime.now(timezone.utc)
+            orphaned.append(batch.id)
+
+        if orphaned:
+            await session.commit()
+            logger.warning(
+                "Marked %d orphaned email batch(es) as FAILED on worker startup (no active run lock found): %s",
+                len(orphaned),
+                orphaned,
+            )
+
+
 async def startup(ctx: dict) -> None:
     await init_db()
     enable_usage_capture()
     settings = get_settings()
     ctx["redis"] = Redis.from_url(settings.REDIS_URL, decode_responses=False)
     await _reconcile_orphaned_jobs(ctx["redis"])
+    await _reconcile_orphaned_email_batches(ctx["redis"])
     logger.info("ARQ worker started")
 
 
@@ -104,7 +151,7 @@ async def shutdown(ctx: dict) -> None:
 
 
 class WorkerSettings:
-    functions = [process_job]
+    functions = [process_job, process_email_batch]
     on_startup = startup
     on_shutdown = shutdown
     redis_settings = RedisSettings.from_dsn(get_settings().REDIS_URL)
